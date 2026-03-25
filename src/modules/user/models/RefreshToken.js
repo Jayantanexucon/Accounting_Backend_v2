@@ -3,7 +3,7 @@ import { connectUserDB } from "../../../config/db/user.db.js";
 
 const refreshTokenSchema = new mongoose.Schema({
   tokenHash: { type: String, required: true, index: true },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  userId: { type: String, required: true }, // Store as string (User DB)
   expiresAt: { type: Date, required: true },
   createdAt: { type: Date, default: Date.now },
   createdByIp: String,
@@ -22,7 +22,6 @@ refreshTokenSchema.virtual("isActive").get(function () {
   return !this.revokedAt && !this.isExpired;
 });
 
-// ✅ IMPORTANT CHANGE
 export const getRefreshTokenModel = async () => {
   const db = await connectUserDB();
   return db.models.RefreshToken || db.model("RefreshToken", refreshTokenSchema);
