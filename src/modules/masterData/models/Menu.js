@@ -1,37 +1,36 @@
 import mongoose, { Schema } from "mongoose";
 import { connectMasterDB } from "../../../config/db/master.db.js";
 
-const EntitySchema = new mongoose.Schema(
+const MenuSchema = new mongoose.Schema(
   {
-    name: {
+    menuKey: {
       type: String,
       required: true,
       trim: true,
       unique: true,
     },
-    key: {
+    menuName: {
       type: String,
       required: true,
       trim: true,
-      unique: true,
     },
-    isNavItem: {
-      type: Boolean,
-      default: false,
+    menuValue: {
+      type: mongoose.Schema.Types.Mixed,
+      required: true,
     },
-    system: {
-      type: Boolean,
-      default: false,
-    },
-    navLink: {
+    description: {
       type: String,
       default: "",
       trim: true,
     },
-    parent: {
-      type: Schema.Types.ObjectId,
-      ref: "Entity",
-      default: null,
+    category: {
+      type: String,
+      default: "general",
+      trim: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
     },
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -45,7 +44,7 @@ const EntitySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const getEntityModel = async () => {
+export const getMenuModel = async () => {
   const db = await connectMasterDB();
-  return db.models.Entity || db.model("Entity", EntitySchema);
+  return db.models.Menu || db.model("Menu", MenuSchema);
 };

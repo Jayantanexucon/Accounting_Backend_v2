@@ -14,6 +14,7 @@ import errorHandler from "./utils/errorHandler.js";
 import authRoutes from "./modules/auth/routes.js";
 import userRoutes from "./modules/user/routes.js";
 import companyRoutes from "./modules/company/routes.js";
+import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
+app.use("/api/masterData", masterDataRoutes);
 
 // 404 Handler
 app.use((req, res) => {

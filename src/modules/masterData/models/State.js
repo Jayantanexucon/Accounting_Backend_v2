@@ -1,37 +1,26 @@
 import mongoose, { Schema } from "mongoose";
 import { connectMasterDB } from "../../../config/db/master.db.js";
 
-const EntitySchema = new mongoose.Schema(
+const StateSchema = new mongoose.Schema(
   {
-    name: {
+    stateName: {
       type: String,
       required: true,
       trim: true,
-      unique: true,
     },
-    key: {
+    stateCode: {
       type: String,
       required: true,
       trim: true,
-      unique: true,
     },
-    isNavItem: {
-      type: Boolean,
-      default: false,
-    },
-    system: {
-      type: Boolean,
-      default: false,
-    },
-    navLink: {
-      type: String,
-      default: "",
-      trim: true,
-    },
-    parent: {
+    country: {
       type: Schema.Types.ObjectId,
-      ref: "Entity",
-      default: null,
+      ref: "Country",
+      required: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
     },
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -45,7 +34,10 @@ const EntitySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const getEntityModel = async () => {
+// Ensure unique state code per country
+StateSchema.index({ country: 1, stateCode: 1 }, { unique: true });
+
+export const getStateModel = async () => {
   const db = await connectMasterDB();
-  return db.models.Entity || db.model("Entity", EntitySchema);
+  return db.models.State || db.model("State", StateSchema);
 };
