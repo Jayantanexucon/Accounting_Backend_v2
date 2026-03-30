@@ -1,0 +1,16 @@
+import express from "express";
+import groupRoutes from "./groupRoutes.js";
+import accountRoutes from "./accountRoutes.js";
+import journalRoutes from "./journalRoutes.js";
+import paymentRoutes from "./paymentRoutes.js";
+import accountTypeRoutes from "./accountTypeRoutes.js";
+
+const router = express.Router();
+
+router.use("/group", groupRoutes);
+router.use("/account", accountRoutes);
+router.use("/journal", journalRoutes);
+router.use("/payment", paymentRoutes);
+router.use("/account-types", accountTypeRoutes);
+
+export default router;

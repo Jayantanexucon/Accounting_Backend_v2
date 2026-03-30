@@ -13,8 +13,9 @@ import errorHandler from "./utils/errorHandler.js";
 // Routes
 import authRoutes from "./modules/auth/routes.js";
 import userRoutes from "./modules/user/routes.js";
-import companyRoutes from "./modules/company/routes.js";
+import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
+import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 
 const app = express();
 
@@ -51,6 +52,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
+app.use("/api/accounting", accountingRoutes);
 
 // 404 Handler
 app.use((req, res) => {

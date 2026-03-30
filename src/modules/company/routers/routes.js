@@ -4,8 +4,8 @@ import {
   addEmployeeController,
   employeesController,
   getAllCompanies,
-} from "./controllers/companyController.js";
-import { protect } from "../../middlewares/authMiddleware.js";
+} from "../controllers/companyController.js";
+import { protect } from "../../../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
