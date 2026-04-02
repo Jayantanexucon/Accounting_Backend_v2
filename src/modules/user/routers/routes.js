@@ -8,8 +8,8 @@ import {
   getCompanyForUserById,
   createCompanyBySuperAdmin,
   updateCompanyBySuperAdmin,
-} from "./controllers/userController.js";
-import { protect, restrictTo } from "../../middlewares/authMiddleware.js";
+} from "../controllers/userController.js";
+import { protect, restrictTo } from "../../../middlewares/authMiddleware.js";
 
 const router = express.Router();
 

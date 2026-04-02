@@ -12,7 +12,7 @@ import errorHandler from "./utils/errorHandler.js";
 
 // Routes
 import authRoutes from "./modules/auth/routes.js";
-import userRoutes from "./modules/user/routes.js";
+import userRoutes from "./modules/user/routers/routes.js";
 import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
@@ -29,13 +29,34 @@ app.use(passport.initialize());
 // Initialize all database connections
 export const initializeDatabases = async () => {
   try {
+    // Parse available modules from environment variable
+    const availableModules = (process.env.AVAILABLE_MODULE || "")
+      .split(",")
+      .map((m) => m.trim().toLowerCase())
+      .filter((m) => m.length > 0);
+
+    console.log(`📦 Initializing modules: ${availableModules.length > 0 ? availableModules.join(", ") : "core only"}`);
+
+    // Always connect core databases
     await connectUserDB();
-    await connectInvoiceDB();
     await connectCompanyDB();
-    await connectAccountingDB();
     await connectAuditDB();
     await connectMasterDB();
-    console.log("✅ All databases connected successfully");
+
+    // Conditionally connect module-specific databases
+    if (availableModules.includes("invoice")) {
+      await connectInvoiceDB();
+    } else {
+      console.log("⏭️  Invoice module disabled - skipping invoice_db connection");
+    }
+
+    if (availableModules.includes("accounting")) {
+      await connectAccountingDB();
+    } else {
+      console.log("⏭️  Accounting module disabled - skipping accounting_db connection");
+    }
+
+    console.log("✅ All available databases connected successfully");
   } catch (error) {
     console.error("❌ Database connection failed:", error);
     process.exit(1);
@@ -52,7 +73,23 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
-app.use("/api/accounting", accountingRoutes);
+
+// Conditionally register module-specific routes
+const availableModules = (process.env.AVAILABLE_MODULE || "")
+  .split(",")
+  .map((m) => m.trim().toLowerCase())
+  .filter((m) => m.length > 0);
+
+if (availableModules.includes("accounting")) {
+  app.use("/api/accounting", accountingRoutes);
+  console.log("✅ Accounting module routes registered at /api/accounting");
+}
+
+// Note: Invoice routes would be registered here when invoice module is available
+// Example:
+// if (availableModules.includes("invoice")) {
+//   app.use("/api/invoice", invoiceRoutes);
+// }
 
 // 404 Handler
 app.use((req, res) => {
