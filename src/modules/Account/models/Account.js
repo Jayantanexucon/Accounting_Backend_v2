@@ -19,15 +19,22 @@ const accountSchema = new mongoose.Schema(
       enum: ["balanceSheet", "revenueAccount"],
       required: [true, "Account type is required"],
     },
+    // FIXED: subType for balance sheet classification
+    subType: {
+      type: String,
+      enum: ["current", "nonCurrent"],
+      default: null,
+    },
     groupId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
       required: [true, "Group ID is required"],
     },
+    // FIXED: groupName should be actual group name, not enum
     groupName: {
       type: String,
-      enum: ["Asset", "Liability", "Equity", "Income", "Expense"],
       required: [true, "Group name is required"],
+      trim: true,
     },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -44,6 +51,34 @@ const accountSchema = new mongoose.Schema(
       enum: ["Debit", "Credit"],
       required: [true, "Opening type is required"],
     },
+    // FIXED: Add scheduleMapping for reporting
+    scheduleMapping: {
+      scheduleMainHead: {
+        type: String,
+        enum: ["Assets", "Equity and Liabilities", "P&L", null],
+        default: null,
+      },
+      scheduleGroup: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      scheduleLineItem: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      noteNo: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      reportType: {
+        type: String,
+        enum: ["balance_sheet", "profit_and_loss", null],
+        default: null,
+      },
+    },
     // Linking to clients/vendors for ledger accounts
     linkedClientId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -56,6 +91,20 @@ const accountSchema = new mongoose.Schema(
       ref: "Vendor",
       default: null,
       sparse: true,
+    },
+    // Denormalized party info for reporting efficiency
+    linkedPartyType: {
+      type: String,
+      enum: ["client", "vendor", null],
+      default: null,
+    },
+    partyName: {
+      type: String,
+      default: null,
+    },
+    partyCode: {
+      type: String,
+      default: null,
     },
     description: String,
     isActive: {

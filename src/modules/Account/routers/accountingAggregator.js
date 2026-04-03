@@ -4,6 +4,7 @@ import accountRoutes from "./accountRoutes.js";
 import journalRoutes from "./journalRoutes.js";
 import paymentRoutes from "./paymentRoutes.js";
 import accountTypeRoutes from "./accountTypeRoutes.js";
+import reportRoutes from "./reportRoutes.js";
 
 const router = express.Router();
 
@@ -12,5 +13,6 @@ router.use("/account", accountRoutes);
 router.use("/journal", journalRoutes);
 router.use("/payment", paymentRoutes);
 router.use("/account-types", accountTypeRoutes);
+router.use("/report", reportRoutes);
 
 export default router;

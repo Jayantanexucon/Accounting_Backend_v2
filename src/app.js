@@ -17,6 +17,7 @@ import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
+import systemRoutes from "./routes/systemRoutes.js";
 
 const app = express();
 
@@ -68,6 +69,9 @@ export const initializeDatabases = async () => {
 app.get("/health", (req, res) => {
   res.json({ status: "✅ Server and databases are connected" });
 });
+
+// System Info Routes (PUBLIC - No authentication required)
+app.use("/api/system", systemRoutes);
 
 // API Routes
 app.use("/api/auth", authRoutes);

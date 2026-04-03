@@ -6,18 +6,72 @@ const groupSchema = new mongoose.Schema(
     name: {
       type: String,
       required: [true, "Group name is required"],
-      unique: true,
       trim: true,
     },
+    // FIXED: nature defines accounting classification
     nature: {
       type: String,
-      enum: ["Debit", "Credit"],
+      enum: ["Asset", "Liability", "Equity", "Income", "Expense"],
       required: [true, "Nature is required"],
     },
+    // FIXED: balanceType defines normal debit/credit balance
     balanceType: {
       type: String,
-      enum: ["Asset", "Liability", "Equity", "Income", "Expense"],
+      enum: ["Debit", "Credit"],
       required: [true, "Balance type is required"],
+    },
+    // Schedule III Mapping fields
+    scheduleMainHead: {
+      type: String,
+      enum: ["Assets", "Equity and Liabilities", "P&L"],
+      default: null,
+    },
+    scheduleGroup: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    scheduleLineItem: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    noteNo: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    scheduleMapping: {
+      reportType: {
+        type: String,
+        enum: ["balance_sheet", "profit_and_loss", null],
+        default: null,
+      },
+      primaryHead: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      subHead: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      lineItemCode: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      lineItemName: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      noteNo: {
+        type: String,
+        trim: true,
+        default: null,
+      },
     },
     companyId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -46,6 +100,26 @@ const groupSchema = new mongoose.Schema(
 
 // Unique index on name + companyId
 groupSchema.index({ name: 1, companyId: 1 }, { unique: true });
+
+// Pre-validate hook to ensure Schedule III mapping consistency
+groupSchema.pre("validate", function (next) {
+  try {
+    // Derive scheduleMapping from Schedule III fields
+    if (this.scheduleMainHead && this.scheduleLineItem) {
+      this.scheduleMapping = {
+        reportType: this.scheduleMainHead === "P&L" ? "profit_and_loss" : "balance_sheet",
+        primaryHead: this.scheduleMainHead,
+        subHead: this.scheduleGroup,
+        lineItemCode: this.scheduleLineItem,
+        lineItemName: this.scheduleLineItem,
+        noteNo: this.noteNo || null,
+      };
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 export const getGroupModel = async () => {
   const db = await connectAccountingDB();
