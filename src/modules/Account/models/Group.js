@@ -20,12 +20,20 @@ const groupSchema = new mongoose.Schema(
       required: [true, "Balance type is required"],
     },
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
-    createdBy: String,
-    updatedBy: String,
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     isActive: {
       type: Boolean,
       default: true,

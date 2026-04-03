@@ -16,6 +16,7 @@ import userRoutes from "./modules/user/routers/routes.js";
 import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
+import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
 
 const app = express();
 
@@ -85,11 +86,10 @@ if (availableModules.includes("accounting")) {
   console.log("✅ Accounting module routes registered at /api/accounting");
 }
 
-// Note: Invoice routes would be registered here when invoice module is available
-// Example:
-// if (availableModules.includes("invoice")) {
-//   app.use("/api/invoice", invoiceRoutes);
-// }
+if (availableModules.includes("invoice")) {
+  app.use("/api/invoice", invoiceRoutes);
+  console.log("✅ Invoice module routes registered at /api/invoice");
+}
 
 // 404 Handler
 app.use((req, res) => {

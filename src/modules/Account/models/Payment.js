@@ -4,16 +4,21 @@ import { connectAccountingDB } from "../../../config/db/accounting.db.js";
 const paymentSchema = new mongoose.Schema(
   {
     invoiceId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Invoice",
       required: [true, "Invoice ID is required"],
       indexed: true,
     },
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
-    clientId: String,
+    clientId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
+    },
     amountPaid: {
       type: Number,
       required: [true, "Amount paid is required"],
@@ -55,7 +60,10 @@ const paymentSchema = new mongoose.Schema(
       enum: ["PENDING", "COMPLETED", "CANCELLED", "RECONCILED"],
       default: "PENDING",
     },
-    journalId: String,
+    journalId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Journal",
+    },
     reconciledAmount: {
       type: Number,
       default: 0,
@@ -65,8 +73,15 @@ const paymentSchema = new mongoose.Schema(
       enum: ["NOT_RECONCILED", "PARTIALLY_RECONCILED", "FULLY_RECONCILED"],
       default: "NOT_RECONCILED",
     },
-    createdBy: String,
-    updatedBy: String,
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
   },
   {
     timestamps: true,

@@ -30,7 +30,8 @@ const accountSchema = new mongoose.Schema(
       required: [true, "Group name is required"],
     },
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -45,12 +46,14 @@ const accountSchema = new mongoose.Schema(
     },
     // Linking to clients/vendors for ledger accounts
     linkedClientId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
       default: null,
       sparse: true,
     },
     linkedVendorId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vendor",
       default: null,
       sparse: true,
     },
@@ -59,8 +62,15 @@ const accountSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-    createdBy: String,
-    updatedBy: String,
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
   },
   {
     timestamps: true,

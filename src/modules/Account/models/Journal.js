@@ -21,7 +21,8 @@ const journalSchema = new mongoose.Schema(
     referenceNumber: String,
     narration: String,
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -50,11 +51,21 @@ const journalSchema = new mongoose.Schema(
       enum: ["Pending", "Approved", "Rejected"],
       default: "Pending",
     },
-    approvedBy: String,
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     approvalDate: Date,
     approvalComments: String,
-    createdBy: String,
-    updatedBy: String,
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     isDeleted: {
       type: Boolean,
       default: false,
