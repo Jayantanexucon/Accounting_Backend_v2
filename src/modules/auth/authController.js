@@ -189,10 +189,32 @@ export const accessTokenController = async (req, res, next) => {
 
 export const fetchMe = async (req, res, next) => {
   try {
-    const user = await findUserRepo({ email: req.user.email });
+    const azureEmail = (
+      req.user?.preferred_username ||
+      req.user?.email ||
+      req.user?.upn ||
+      ""
+    ).toLowerCase();
+    const azureObjectId = req.user?.oid;
+
+    let user = null;
+
+    if (azureObjectId) {
+      user = await findUserRepo({ azureObjectId });
+    }
+
+    if (!user && azureEmail) {
+      user = await findUserRepo({ email: azureEmail });
+    }
+
     if (!user) {
       throw new AppError("User not found", 404);
     }
+
+    if (azureObjectId && !user.azureObjectId) {
+      user = await updateUserRepo(user._id, { azureObjectId });
+    }
+
     const allCompanies = await findCompaniesRepo({});
     if (user.role === "superAdmin") {
       return res.json({
