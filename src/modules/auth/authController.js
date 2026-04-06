@@ -215,22 +215,49 @@ export const fetchMe = async (req, res, next) => {
       user = await updateUserRepo(user._id, { azureObjectId });
     }
 
+    const selectedCompanyId = req.cookies?.AC_CMP;
     const allCompanies = await findCompaniesRepo({});
+
+    const resolveSelectedCompany = (companies) => {
+      if (!Array.isArray(companies) || companies.length === 0) return null;
+
+      if (selectedCompanyId) {
+        const matchedCompany = companies.find(
+          (company) => company?._id?.toString() === selectedCompanyId
+        );
+        if (matchedCompany) return matchedCompany;
+      }
+
+      if (companies.length === 1) {
+        return companies[0];
+      }
+
+      return null;
+    };
+
     if (user.role === "superAdmin") {
       return res.json({
         user,
         companies: allCompanies,
+        selectedCompany: resolveSelectedCompany(allCompanies),
       });
     }
+
     const allowedCompanyIds = new Set(
-      user?.permissions?.map((p) => p.companyId?.toString() || p.companyId)
+      user?.permissions
+        ?.map((p) => p.company?._id || p.companyId || p.company)
+        .filter(Boolean)
+        .map((companyId) => companyId.toString())
     );
+
     const companies = allCompanies.filter((company) =>
-      allowedCompanyIds.has(company._id.toString())
+      allowedCompanyIds.has(company?._id?.toString())
     );
+
     return res.json({
       user,
       companies,
+      selectedCompany: resolveSelectedCompany(companies),
     });
   } catch (error) {
     next(error);
