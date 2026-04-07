@@ -211,6 +211,10 @@ export const fetchMe = async (req, res, next) => {
       throw new AppError("User not found", 404);
     }
 
+    if (user.isBlocked) {
+      throw new AppError("Your account has been blocked", 403);
+    }
+
     if (azureObjectId && !user.azureObjectId) {
       user = await updateUserRepo(user._id, { azureObjectId });
     }
@@ -235,9 +239,12 @@ export const fetchMe = async (req, res, next) => {
       return null;
     };
 
+    const accessToken = createAccessToken(user);
+
     if (user.role === "superAdmin") {
       return res.json({
         user,
+        accessToken,
         companies: allCompanies,
         selectedCompany: resolveSelectedCompany(allCompanies),
       });
@@ -256,6 +263,7 @@ export const fetchMe = async (req, res, next) => {
 
     return res.json({
       user,
+      accessToken,
       companies,
       selectedCompany: resolveSelectedCompany(companies),
     });

@@ -18,6 +18,9 @@ import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
 import systemRoutes from "./routes/systemRoutes.js";
+import dotenv from "dotenv";
+dotenv.config();
+
 
 const app = express();
 
@@ -90,7 +93,17 @@ const availableModules = (process.env.AVAILABLE_MODULE || "")
   .map((m) => m.trim().toLowerCase())
   .filter((m) => m.length > 0);
 
+console.log("hiiiiiiiiiiiii");
+console.log(process.env.AVAILABLE_MODULE);
+
+
+console.log(availableModules);
+
+
 if (availableModules.includes("accounting")) {
+  console.log('====================================');
+  console.log("accounting module availavle");
+  console.log('====================================');
   app.use("/api/accounting", accountingRoutes);
   console.log("✅ Accounting module routes registered at /api/accounting");
 }

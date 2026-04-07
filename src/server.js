@@ -1,8 +1,8 @@
-import app, { initializeDatabases } from "./app.js";
 import dotenv from "dotenv";
-import { configurePassport } from "./config/passport.js";
-
 dotenv.config();
+
+import app, { initializeDatabases } from "./app.js";
+import { configurePassport } from "./config/passport.js";
 
 const PORT = process.env.PORT || 5000;
 
