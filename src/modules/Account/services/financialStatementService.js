@@ -38,8 +38,16 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
     if (!account.scheduleMainHead) continue;
 
     const accountLine = {
+      accountId: account.accountId,
       code: account.accountCode,
       name: account.accountName,
+      groupName: account.groupName,
+      normalBalance: account.normalBalance,
+      openingBalance: account.openingBalance || 0,
+      linkedClientId: account.linkedClientId,
+      linkedVendorId: account.linkedVendorId,
+      linkedPartyType: account.linkedPartyType,
+      partyName: account.partyName,
       scheduleGroup: account.scheduleGroup,
       scheduleLineItem: account.scheduleLineItem,
       amount: account.closingDebit || account.closingCredit || 0,
@@ -167,8 +175,16 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
     if (account.scheduleMainHead !== "P&L") continue;
 
     const accountLine = {
+      accountId: account.accountId,
       code: account.accountCode,
       name: account.accountName,
+      groupName: account.groupName,
+      normalBalance: account.normalBalance,
+      openingBalance: account.openingBalance || 0,
+      linkedClientId: account.linkedClientId,
+      linkedVendorId: account.linkedVendorId,
+      linkedPartyType: account.linkedPartyType,
+      partyName: account.partyName,
       scheduleLineItem: account.scheduleLineItem,
       amount: account.periodDebit || account.periodCredit || 0,
       debit: account.periodDebit || 0,
