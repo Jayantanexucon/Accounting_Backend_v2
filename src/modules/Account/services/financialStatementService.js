@@ -50,7 +50,7 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
         assets.push(accountLine);
         break;
       case "Equity and Liabilities":
-        if (account.groupName && account.groupName.includes("Equity")) {
+        if (account.groupNature === "Equity") {
           equity.push(accountLine);
         } else {
           liabilities.push(accountLine);
@@ -177,7 +177,7 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
 
     // Income accounts are credit balance accounts (positive credit = income)
     // Expense accounts are debit balance accounts (positive debit = expense)
-    if (account.groupName && account.groupName.match(/income|revenue/i)) {
+    if (account.groupNature === "Income") {
       accountLine.amount = account.periodCredit || 0;
       revenue.push(accountLine);
     } else {

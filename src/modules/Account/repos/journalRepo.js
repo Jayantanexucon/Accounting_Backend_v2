@@ -1,5 +1,39 @@
 import AppError from "../../../utils/AppError.js";
 import { getJournalModel } from "../models/Journal.js";
+import { getJournalLineModel } from "../models/JournalLine.js";
+
+const attachLinesToJournals = async (journals = []) => {
+  if (!journals.length) return journals;
+
+  const JournalLine = await getJournalLineModel();
+  const journalIds = journals.map((journal) => journal._id);
+  const lines = await JournalLine.find({ journalId: { $in: journalIds } })
+    .sort({ lineNumber: 1, createdAt: 1 })
+    .lean();
+
+  const linesByJournalId = new Map();
+  for (const line of lines) {
+    const key = line.journalId?.toString();
+    if (!linesByJournalId.has(key)) {
+      linesByJournalId.set(key, []);
+    }
+    linesByJournalId.get(key).push({
+      ...line,
+      debit: line.debitAmount || 0,
+      credit: line.creditAmount || 0,
+      account: {
+        _id: line.accountId,
+        name: line.accountName,
+        code: line.accountCode,
+      },
+    });
+  }
+
+  return journals.map((journal) => ({
+    ...journal,
+    lines: linesByJournalId.get(journal._id.toString()) || [],
+  }));
+};
 
 export const createJournalRepo = async (journalData) => {
   try {
@@ -19,7 +53,9 @@ export const getJournalByIdRepo = async (id) => {
   try {
     const Journal = await getJournalModel();
     const journal = await Journal.findById(id).lean();
-    return journal;
+    if (!journal) return null;
+    const [journalWithLines] = await attachLinesToJournals([journal]);
+    return journalWithLines;
   } catch (error) {
     throw new AppError(error.message || "Error finding journal", 500, "getJournalByIdRepo");
   }
@@ -29,7 +65,7 @@ export const getJournalsRepo = async (filter = {}) => {
   try {
     const Journal = await getJournalModel();
     const journals = await Journal.find(filter).sort({ date: -1 }).lean();
-    return journals;
+    return attachLinesToJournals(journals);
   } catch (error) {
     throw new AppError(error.message || "Error retrieving journals", 500, "getJournalsRepo");
   }

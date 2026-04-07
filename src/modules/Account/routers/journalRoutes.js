@@ -11,6 +11,10 @@ import {
   approveJournal,
   rejectJournal,
   getPendingApprovals,
+  getJournalApprovalRequests,
+  requestJournalEditApproval,
+  requestJournalDeleteApproval,
+  updateJournalApprovalRequest,
 } from "../controllers/journalController.js";
 
 const router = express.Router();
@@ -24,6 +28,14 @@ router.get("/", getAllJournals);
 router.get("/stats/overview", getJournalStats);
 
 router.get("/pending/approvals", getPendingApprovals);
+
+router.get("/approval-requests", getJournalApprovalRequests);
+
+router.put("/approval-requests/:requestId", accessControlMiddleware({ entityKey: "Journal", action: "UPDATE" }), updateJournalApprovalRequest);
+
+router.post("/:id/request-edit", accessControlMiddleware({ entityKey: "Journal", action: "UPDATE" }), requestJournalEditApproval);
+
+router.post("/:id/request-delete", accessControlMiddleware({ entityKey: "Journal", action: "DELETE" }), requestJournalDeleteApproval);
 
 router.get("/:id", getJournalById);
 

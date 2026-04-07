@@ -101,23 +101,17 @@ const groupSchema = new mongoose.Schema(
 // Unique index on name + companyId
 groupSchema.index({ name: 1, companyId: 1 }, { unique: true });
 
-// Pre-validate hook to ensure Schedule III mapping consistency
-groupSchema.pre("validate", function (next) {
-  try {
-    // Derive scheduleMapping from Schedule III fields
-    if (this.scheduleMainHead && this.scheduleLineItem) {
-      this.scheduleMapping = {
-        reportType: this.scheduleMainHead === "P&L" ? "profit_and_loss" : "balance_sheet",
-        primaryHead: this.scheduleMainHead,
-        subHead: this.scheduleGroup,
-        lineItemCode: this.scheduleLineItem,
-        lineItemName: this.scheduleLineItem,
-        noteNo: this.noteNo || null,
-      };
-    }
-    next();
-  } catch (error) {
-    next(error);
+// Derive scheduleMapping from Schedule III fields before validation.
+groupSchema.pre("validate", function () {
+  if (this.scheduleMainHead && this.scheduleLineItem) {
+    this.scheduleMapping = {
+      reportType: this.scheduleMainHead === "P&L" ? "profit_and_loss" : "balance_sheet",
+      primaryHead: this.scheduleMainHead,
+      subHead: this.scheduleGroup,
+      lineItemCode: this.scheduleLineItem,
+      lineItemName: this.scheduleLineItem,
+      noteNo: this.noteNo || null,
+    };
   }
 });
 

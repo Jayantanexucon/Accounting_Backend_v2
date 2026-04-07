@@ -19,6 +19,7 @@ const journalSchema = new mongoose.Schema(
       indexed: true,
     },
     referenceNumber: String,
+    externalDocNo: String,
     narration: String,
     companyId: {
       type: mongoose.Schema.Types.ObjectId,

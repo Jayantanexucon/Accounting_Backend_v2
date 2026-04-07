@@ -48,7 +48,7 @@ const accountSchema = new mongoose.Schema(
     },
     openingType: {
       type: String,
-      enum: ["Debit", "Credit"],
+      enum: ["debit", "credit"],
       required: [true, "Opening type is required"],
     },
     // FIXED: Add scheduleMapping for reporting

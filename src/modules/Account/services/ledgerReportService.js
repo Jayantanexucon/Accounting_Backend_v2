@@ -47,27 +47,35 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
   }
 
   // Get journal lines for this account in the period
-  const JournalLine = await getJournalLineModel();
-  const journalLines = await JournalLine.find({
-    accountId: accountId,
-    journalDate: {
+  const Journal = await getJournalModel();
+  const journalFilter = {
+    companyId,
+    date: {
       $gte: new Date(startDate),
       $lte: new Date(endDate),
     },
-  })
-    .populate({
-      path: "journalId",
-      select: "journalNumber date status voucherType approvalStatus",
-    })
+  };
+  const journals = await Journal.find(journalFilter)
+    .select("number date status voucherType approvalStatus sourceType referenceNumber externalDocNo narration partyName")
     .lean();
+  const journalIds = journals.map((journal) => journal._id);
+  const journalMap = new Map(journals.map((journal) => [journal._id.toString(), journal]));
 
-  // Get journal model for posting status validation
-  const Journal = await getJournalModel();
+  const JournalLine = await getJournalLineModel();
+  const journalLines = await JournalLine.find({
+    accountId,
+    companyId,
+    journalId: { $in: journalIds },
+  }).lean();
 
   // Sort journal lines chronologically
-  const sortedLines = journalLines.sort((a, b) =>
-    new Date(a.journalDate) - new Date(b.journalDate)
-  );
+  const sortedLines = journalLines
+    .map((line) => ({
+      ...line,
+      journal: journalMap.get(line.journalId?.toString()) || null,
+    }))
+    .filter((line) => line.journal)
+    .sort((a, b) => new Date(a.journal.date) - new Date(b.journal.date));
 
   if (reverseOrder) {
     sortedLines.reverse();
@@ -82,18 +90,18 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     const credit = line.creditAmount || 0;
 
     // Compute running balance based on account's normal balance
-    if (account.openingType === "Debit") {
+    if (`${account.openingType}`.toLowerCase() === "debit") {
       runningBalance += debit - credit;
     } else {
       runningBalance += credit - debit;
     }
 
     transactions.push({
-      journalDate: line.journalDate,
-      voucherType: line.journalId?.voucherType,
-      journalNumber: line.journalId?.journalNumber,
-      reference: line.reference,
-      narration: line.narration,
+      journalDate: line.journal.date,
+      voucherType: line.journal.voucherType,
+      journalNumber: line.journal.number,
+      reference: line.journal.referenceNumber || line.journal.externalDocNo || "",
+      narration: line.journal.narration || line.description || "",
       debit: debit > 0 ? debit : 0,
       credit: credit > 0 ? credit : 0,
       runningBalance,
@@ -103,7 +111,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
   // Compute account totals
   const { totalDebit, totalCredit } = sumJournalLineAmounts(journalLines, "debitAmount", "creditAmount");
 
-  const closingBalance = account.openingType === "Debit"
+  const closingBalance = `${account.openingType}`.toLowerCase() === "debit"
     ? account.openingBalance + (totalDebit - totalCredit)
     : account.openingBalance + (totalCredit - totalDebit);
 
@@ -114,7 +122,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       accountName: account.name,
       groupName: account.groupName,
       nature: "Asset", // Would need to join group to get this properly
-      normalBalance: account.openingType,
+      normalBalance: `${account.openingType}`.toLowerCase() === "credit" ? "Credit" : "Debit",
     },
     period: {
       startDate,

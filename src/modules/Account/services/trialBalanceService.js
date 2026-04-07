@@ -1,6 +1,7 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
+import { getJournalModel } from "../models/Journal.js";
 import {
   aggregateAccountBalances,
   buildAccountBalanceForReport,
@@ -47,16 +48,26 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
     accountQuery.isActive = true;
   }
 
-  const accounts = await Account.find(accountQuery).lean();
+  const accounts = await Account.find(accountQuery).populate("groupId").lean();
 
   if (accounts.length === 0) {
     throw new AppError("No accounts found for this company", 404, "getTrialBalance");
   }
 
   // Get all journal lines up to the as-of date
+  const Journal = await getJournalModel();
+  const journals = await Journal.find({
+    companyId,
+    date: { $lte: dateAsOf },
+  })
+    .select("_id")
+    .lean();
+  const journalIds = journals.map((journal) => journal._id);
+
   const JournalLine = await getJournalLineModel();
   const journalLines = await JournalLine.find({
-    journalDate: { $lte: dateAsOf },
+    companyId,
+    journalId: { $in: journalIds },
   }).lean();
 
   // Group journal lines by account
@@ -80,41 +91,11 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
 
     const balanceRecord = buildAccountBalanceForReport(
       account,
-      0, // Pre-opening (assuming opening balance is in account.openingBalance)
-      0,
+      `${account.openingType}`.toLowerCase() === "debit" ? account.openingBalance || 0 : 0,
+      `${account.openingType}`.toLowerCase() === "credit" ? account.openingBalance || 0 : 0,
       totalDebit,
       totalCredit
     );
-
-    // Include opening balance in computation
-    balanceRecord.openingBalance = account.openingBalance || 0;
-    balanceRecord.closingBalance = account.openingBalance + (totalDebit - totalCredit);
-
-    if (account.openingType === "Credit") {
-      balanceRecord.closingBalance = account.openingBalance + (totalCredit - totalDebit);
-    }
-
-    // Re-split with updated closing balance
-    if (balanceRecord.closingBalance > 0) {
-      if (account.openingType === "Debit") {
-        balanceRecord.closingDebit = balanceRecord.closingBalance;
-        balanceRecord.closingCredit = 0;
-      } else {
-        balanceRecord.closingDebit = 0;
-        balanceRecord.closingCredit = balanceRecord.closingBalance;
-      }
-    } else if (balanceRecord.closingBalance < 0) {
-      if (account.openingType === "Debit") {
-        balanceRecord.closingDebit = 0;
-        balanceRecord.closingCredit = Math.abs(balanceRecord.closingBalance);
-      } else {
-        balanceRecord.closingDebit = Math.abs(balanceRecord.closingBalance);
-        balanceRecord.closingCredit = 0;
-      }
-    } else {
-      balanceRecord.closingDebit = 0;
-      balanceRecord.closingCredit = 0;
-    }
 
     // Filter zero balances if requested
     if (!includeZeroBalance && balanceRecord.closingBalance === 0) {
@@ -172,9 +153,6 @@ export const getTrialBalanceForPeriod = async (companyId, startDate, endDate, op
 
   const dateStart = new Date(startDate);
   const dateEnd = new Date(endDate);
-  const dateBeforeStart = new Date(dateStart);
-  dateBeforeStart.setFullYear(dateBeforeStart.getFullYear() - 100); // Get all opening balances
-
   // Get opening balance as of day before period start
   const openingTrialBalance = await getTrialBalance(companyId, new Date(dateStart.getTime() - 86400000), options);
 

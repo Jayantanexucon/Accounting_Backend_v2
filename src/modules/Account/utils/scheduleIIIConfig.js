@@ -250,4 +250,43 @@ export const validateGroupScheduleMapping = ({
   return true;
 };
 
+export const deriveLedgerPropertiesFromGroup = (group) => {
+  if (!group?.nature) {
+    throw new AppError("Group nature is required for ledger classification", 400, "deriveLedgerPropertiesFromGroup");
+  }
+
+  validateGroupScheduleMapping({
+    nature: group.nature,
+    balanceType: group.balanceType,
+    scheduleMainHead: group.scheduleMainHead,
+    scheduleGroup: group.scheduleGroup,
+    scheduleLineItem: group.scheduleLineItem,
+  });
+
+  const config = SCHEDULE_III_CONFIG[group.nature];
+  const isBalanceSheet = config.accountType === "balanceSheet";
+
+  let subType;
+  if (isBalanceSheet) {
+    subType = /non-current/i.test(group.scheduleGroup) ? "nonCurrent" : "current";
+    if (group.nature === "Equity") {
+      subType = "nonCurrent";
+    }
+  }
+
+  return {
+    type: config.accountType,
+    openingType: config.balanceType.toLowerCase(),
+    subType: isBalanceSheet ? subType : undefined,
+    scheduleMapping: {
+      reportType: config.accountType === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+      primaryHead: group.scheduleMainHead,
+      subHead: group.scheduleGroup,
+      lineItemCode: group.scheduleLineItem,
+      lineItemName: group.scheduleLineItem,
+      noteNo: group.noteNo || null,
+    },
+  };
+};
+
 export default SCHEDULE_III_CONFIG;
