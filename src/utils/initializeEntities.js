@@ -52,13 +52,13 @@ export const initializeEntities = async () => {
         navLink: "/purchaseorder-data",
         system: false,
       },
-      {
-        name: "Admin Settings",
-        key: "ADMIN_SETTINGS",
-        isNavItem: false,
-        navLink: "",
-        system: true,
-      },
+      // {
+      //   name: "Admin Settings",
+      //   key: "ADMIN_SETTINGS",
+      //   isNavItem: false,
+      //   navLink: "",
+      //   system: true,
+      // },
     ];
 
     const parentMap = {};
@@ -174,22 +174,22 @@ export const initializeEntities = async () => {
       },
 
       // Admin Settings children
-      {
-        name: "User Management",
-        key: "USER_MANAGEMENT",
-        isNavItem: true,
-        navLink: "/admin/users",
-        system: false,
-        parentKey: "ADMIN_SETTINGS",
-      },
-      {
-        name: "Access Management",
-        key: "ACCESS_MANAGEMENT",
-        isNavItem: true,
-        navLink: "/admin/access",
-        system: false,
-        parentKey: "ADMIN_SETTINGS",
-      },
+      // {
+      //   name: "User Management",
+      //   key: "USER_MANAGEMENT",
+      //   isNavItem: true,
+      //   navLink: "/admin/users",
+      //   system: false,
+      //   parentKey: "ADMIN_SETTINGS",
+      // },
+      // {
+      //   name: "Access Management",
+      //   key: "ACCESS_MANAGEMENT",
+      //   isNavItem: true,
+      //   navLink: "/admin/access",
+      //   system: false,
+      //   parentKey: "ADMIN_SETTINGS",
+      // },
 
       // Special grandchild
       {
