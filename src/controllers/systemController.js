@@ -1,4 +1,5 @@
 import ApiResponse from "../utils/ApiResponse.js";
+import AppError from "../utils/AppError.js";
 
 /**
  * System Controller
@@ -271,8 +272,337 @@ export const getSystemHealth = (req, res, next) => {
   }
 };
 
-export default {
-  getAvailableModules,
-  getModuleStatus,
-  getSystemHealth,
+/**
+ * Get user's accessible modules with their permissions
+ * Requires authentication - returns only modules user has access to
+ * Used to dynamically populate navigation/entity menu in frontend
+ */
+export const getUserAccessibleModules = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    const companyId = req.query.companyId;
+
+    if (!userId) {
+      throw new AppError("User not authenticated", 401, "getUserAccessibleModules");
+    }
+
+    if (!companyId) {
+      throw new AppError("Company ID is required", 400, "getUserAccessibleModules");
+    }
+
+    // Get user from database
+    const User = await import("../modules/user/models/User.js").then(m => m.getUserModel());
+    const user = await User.findById(userId).lean();
+
+    if (!user) {
+      throw new AppError("User not found", 404, "getUserAccessibleModules");
+    }
+
+    // Parse available modules from environment
+    const availableModulesStr = (process.env.AVAILABLE_MODULE || "")
+      .split(",")
+      .map((m) => m.trim().toLowerCase())
+      .filter((m) => m.length > 0);
+
+    // Define module metadata
+    const moduleMetadata = {
+      accounting: {
+        name: "Accounting Module",
+        path: "/api/accounting",
+        icon: "Calculator",
+        enabled: availableModulesStr.includes("accounting"),
+        description: "Core accounting features including accounts, journals, groups, and financial reporting",
+        features: [
+          { id: "accounts", name: "Accounts", icon: "DollarSign", path: "/api/accounting/account" },
+          { id: "journals", name: "Journals", icon: "BookOpen", path: "/api/accounting/journal" },
+          { id: "groups", name: "Groups", icon: "Layers", path: "/api/accounting/group" },
+          { id: "trial-balance", name: "Trial Balance", icon: "Scale", path: "/api/accounting/report/:companyId/trial-balance" },
+          { id: "profit-loss", name: "Profit And Loss", icon: "TrendingUp", path: "/api/accounting/report/:companyId/profit-loss" },
+          { id: "balance-sheet", name: "Balance Sheet", icon: "BarChart3", path: "/api/accounting/report/:companyId/balance-sheet" },
+          { id: "ledger", name: "Ledger", icon: "BookMarked", path: "/api/accounting/report/:companyId/ledger" },
+          { id: "day-book", name: "Day Book", icon: "Calendar", path: "/api/accounting/journal" },
+        ],
+        database: "accounting_db",
+        status: availableModulesStr.includes("accounting") ? "active" : "disabled",
+      },
+      invoice: {
+        name: "Invoice Module",
+        path: "/api/invoice",
+        icon: "FileText",
+        enabled: availableModulesStr.includes("invoice"),
+        description: "Invoice and purchase order management with milestones and payment tracking",
+        features: [
+          { id: "invoices", name: "Invoice", icon: "DollarSign", path: "/api/invoice" },
+          { id: "purchase-orders", name: "Purchase Order", icon: "Package", path: "/api/invoice/po" },
+        ],
+        database: "invoice_db",
+        status: availableModulesStr.includes("invoice") ? "active" : "disabled",
+      },
+      masterData: {
+        name: "Master Control",
+        path: "/api/masterData",
+        icon: "Database",
+        enabled: true,
+        description: "Master data management including clients, vendors, and configuration",
+        features: [
+          { id: "clients", name: "Client Details", icon: "Users", path: "/api/masterData/client" },
+          { id: "vendors", name: "Vendor", icon: "Briefcase", path: "/api/masterData/vendor" },
+          { id: "hsn", name: "HSN/SAC Codes", icon: "Tag", path: "/api/masterData/hsn" },
+          { id: "entities", name: "Testing", icon: "BarChart", path: "/api/masterData/entity" },
+        ],
+        database: "master_db",
+        status: "active",
+      },
+    };
+
+    // Get user permissions for this company
+    const userPermissions = user.permissions.find(p => p.companyId?.toString() === companyId) || {};
+    const allowedEntities = userPermissions.entityId ? [userPermissions.entityId] : [];
+    const allowedActions = userPermissions.actions || [];
+
+    // Build accessible modules based on user role and permissions
+    let accessibleModules = [];
+
+    // Superadmin and admin get all modules
+    if (user.role === "superAdmin" || user.role === "admin") {
+      accessibleModules = ["accounting", "invoice", "masterData"].filter(m => moduleMetadata[m].enabled || m === "masterData");
+    } else {
+      // Regular users get modules based on permissions
+      if (allowedEntities.includes("accounting")) {
+        accessibleModules.push("accounting");
+      }
+      if (allowedEntities.includes("invoice")) {
+        accessibleModules.push("invoice");
+      }
+      accessibleModules.push("masterData");
+    }
+
+    // Build response with only accessible modules
+    const response = {
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        companyId,
+      },
+      modules: {
+        accessible: accessibleModules,
+        count: accessibleModules.length,
+      },
+      details: {},
+      permissions: {
+        allowedEntities: allowedEntities,
+        allowedActions: allowedActions,
+      },
+    };
+
+    // Add metadata for accessible modules only
+    for (const module of accessibleModules) {
+      if (moduleMetadata[module]) {
+        const moduleData = { ...moduleMetadata[module] };
+
+        // Filter features based on user permissions for regular users
+        if (user.role !== "superAdmin" && user.role !== "admin") {
+          // If user has specific permissions, only show permitted features
+          if (allowedActions.length > 0) {
+            moduleData.features = moduleData.features.filter(f => 
+              allowedActions.includes("VIEW") || allowedActions.includes("READ")
+            );
+          }
+        }
+
+        response.details[module] = moduleData;
+      }
+    }
+
+    new ApiResponse({
+      statusCode: 200,
+      data: response,
+      message: `${accessibleModules.length} modules available for ${user.name}`,
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
 };
+
+/**
+ * Get user's entity permissions for navigation/entity list population
+ * Returns entities and features the user can access
+ * Used for filtering navigation menu and entity table in frontend
+ */
+export const getUserEntityPermissions = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    const companyId = req.query.companyId;
+
+    if (!userId) {
+      throw new AppError("User not authenticated", 401, "getUserEntityPermissions");
+    }
+
+    if (!companyId) {
+      throw new AppError("Company ID is required", 400, "getUserEntityPermissions");
+    }
+
+    // Get user from database
+    const User = await import("../modules/user/models/User.js").then(m => m.getUserModel());
+    const user = await User.findById(userId).lean();
+
+    if (!user) {
+      throw new AppError("User not found", 404, "getUserEntityPermissions");
+    }
+
+    // Get Entity model from masterData DB
+    const Entity = await import("../modules/masterData/models/Entity.js").then(m => m.getEntityModel());
+
+    // Fetch all entities and populate parent references
+    const allEntities = await Entity.find({})
+      .populate("parent", "_id name key navLink isNavItem system")
+      .lean();
+
+    // Parse available modules from environment
+    const availableModulesStr = (process.env.AVAILABLE_MODULE || "")
+      .split(",")
+      .map((m) => m.trim().toLowerCase())
+      .filter((m) => m.length > 0);
+
+    // Get user permissions for this company
+    const userCompanyPermissions = user.permissions.filter(
+      p => p.company?.toString() === companyId || p.companyId?.toString() === companyId
+    );
+
+    // Extract accessible entity IDs from user permissions
+    const accessibleEntityIds = new Set(
+      userCompanyPermissions.map(p => 
+        typeof p.entity === "object" ? p.entity._id?.toString() : p.entity?.toString()
+      )
+    );
+
+    // Function to check if entity is enabled based on available modules
+    const isEntityEnabled = (entity) => {
+      const key = entity.key?.toLowerCase();
+      
+      // Always enabled entities (core modules)
+      if (["dashboard", "clients", "vendor", "hsn/sac codes", "testing"].some(k => key?.includes(k))) {
+        return true;
+      }
+
+      // Check if accounting-related entities are enabled
+      if (availableModulesStr.includes("accounting")) {
+        if (["accounting", "journal", "groups", "trial balance", "profit and loss", 
+             "balance sheet", "day book", "chart of accounts", "contra", "ledger"].some(k => key?.includes(k))) {
+          return true;
+        }
+      }
+
+      // Check if invoice-related entities are enabled
+      if (availableModulesStr.includes("invoice")) {
+        if (["invoice", "purchase order"].some(k => key?.includes(k))) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+
+    // Filter entities based on user role and permissions
+    let accessibleEntities = [];
+
+    if (user.role === "superAdmin") {
+      // SuperAdmin sees all enabled entities
+      accessibleEntities = allEntities.filter(isEntityEnabled);
+    } else if (user.role === "admin") {
+      // Admin sees all enabled entities
+      accessibleEntities = allEntities.filter(isEntityEnabled);
+    } else {
+      // Regular user sees only:
+      // 1. Entities they have explicit permission for
+      // 2. Parent entities of entities they have permission for (for navigation hierarchy)
+      const permittedEntityIds = new Set(accessibleEntityIds);
+
+      // Add parent entities recursively to maintain hierarchy
+      for (const entityId of permittedEntityIds) {
+        let currentEntity = allEntities.find(e => e._id?.toString() === entityId.toString());
+        while (currentEntity?.parent) {
+          permittedEntityIds.add(currentEntity.parent._id?.toString());
+          currentEntity = allEntities.find(e => e._id?.toString() === currentEntity.parent._id?.toString());
+        }
+      }
+
+      // Always include Master Control and Dashboard
+      const dashboardEntity = allEntities.find(e => e.key === "DASHBOARD");
+      const masterControlEntity = allEntities.find(e => e.key === "MASTER CONTROL");
+      
+      accessibleEntities = allEntities.filter(entity => 
+        isEntityEnabled(entity) && (
+          permittedEntityIds.has(entity._id?.toString()) ||
+          entity._id?.toString() === dashboardEntity?._id?.toString() ||
+          entity._id?.toString() === masterControlEntity?._id?.toString()
+        )
+      );
+    }
+
+    // Build response with user's specific permissions for each entity
+    const entityResponse = accessibleEntities.map(entity => {
+      // Find user's specific permissions for this entity
+      const entityPermission = userCompanyPermissions.find(p => 
+        (typeof p.entity === "object" ? p.entity._id?.toString() : p.entity?.toString()) === entity._id?.toString()
+      );
+
+      return {
+        _id: entity._id,
+        name: entity.name,
+        key: entity.key,
+        isNavItem: entity.isNavItem,
+        system: entity.system,
+        navLink: entity.navLink,
+        parent: entity.parent || null,
+        createdAt: entity.createdAt,
+        updatedAt: entity.updatedAt,
+        // User's specific permissions for this entity
+        userPermissions: {
+          actions: entityPermission?.actions || (user.role === "superAdmin" || user.role === "admin" ? ["VIEW", "CREATE", "EDIT", "DELETE"] : []),
+          canView: true,
+          canCreate: user.role === "superAdmin" || user.role === "admin" || entityPermission?.actions?.includes("CREATE") || false,
+          canEdit: user.role === "superAdmin" || user.role === "admin" || entityPermission?.actions?.includes("EDIT") || false,
+          canDelete: user.role === "superAdmin" || entityPermission?.actions?.includes("DELETE") || false,
+        },
+      };
+    });
+
+    // Separate root entities and child entities for better structure
+    const rootEntities = entityResponse.filter(e => !e.parent);
+    const childEntities = entityResponse.filter(e => e.parent);
+
+    const response = {
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        companyId,
+      },
+      data: entityResponse,
+      summary: {
+        total: entityResponse.length,
+        rootEntities: rootEntities.length,
+        childEntities: childEntities.length,
+      },
+      structure: {
+        roots: rootEntities,
+        children: childEntities,
+      },
+    };
+
+    new ApiResponse({
+      statusCode: 200,
+      data: response,
+      message: `${entityResponse.length} entities available for ${user.name}`,
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+

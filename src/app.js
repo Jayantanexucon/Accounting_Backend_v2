@@ -9,6 +9,7 @@ import { connectAccountingDB } from "./config/db/accounting.db.js";
 import { connectAuditDB } from "./config/db/audit.db.js";
 import { connectMasterDB } from "./config/db/master.db.js";
 import errorHandler from "./utils/errorHandler.js";
+import { initializeEntities } from "./utils/initializeEntities.js";
 
 // Routes
 import authRoutes from "./modules/auth/routes.js";
@@ -19,8 +20,8 @@ import accountingRoutes from "./modules/Account/routers/accountingAggregator.js"
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
 import systemRoutes from "./routes/systemRoutes.js";
 import dotenv from "dotenv";
-dotenv.config();
 
+dotenv.config();
 
 const app = express();
 
@@ -67,6 +68,9 @@ export const initializeDatabases = async () => {
     }
 
     console.log("✅ All available databases connected successfully");
+
+    // Initialize default entities after all databases are connected
+    await initializeEntities();
   } catch (error) {
     console.error("❌ Database connection failed:", error);
     process.exit(1);
