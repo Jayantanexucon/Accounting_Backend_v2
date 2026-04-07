@@ -31,12 +31,41 @@ const azureAuthMiddleware = (req, res, next) => {
       message: "Azure AD SSO is not configured",
     });
   }
-  passport.authenticate("oauth-bearer", { session: false })(req, res, next);
+  if (!passport._strategy("oauth-bearer")) {
+    return res.status(500).json({
+      success: false,
+      message: "Azure AD bearer strategy is not initialized",
+    });
+  }
+  passport.authenticate(
+    "oauth-bearer",
+    { session: false },
+    (error, user, info) => {
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          message: error.message || "Azure authentication failed",
+          details: info || null,
+        });
+      }
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: info?.message || "Unauthorized",
+          details: info || null,
+        });
+      }
+
+      req.user = user;
+      next();
+    }
+  )(req, res, next);
 };
 
 router.get("/azure/callback", azureAuthMiddleware, azureSSOCallback);
 
-// Fetch authenticated user (Azure)
-router.get("/fetchMe", protect, fetchMe);
+// Fetch authenticated user from Azure access token
+router.get("/fetchMe", azureAuthMiddleware, fetchMe);
 
 export default router;

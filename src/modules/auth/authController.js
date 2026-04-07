@@ -189,26 +189,75 @@ export const accessTokenController = async (req, res, next) => {
 
 export const fetchMe = async (req, res, next) => {
   try {
-    const user = await findUserRepo({ email: req.user.email });
+    const azureEmail = (
+      req.user?.preferred_username ||
+      req.user?.email ||
+      req.user?.upn ||
+      ""
+    ).toLowerCase();
+    const azureObjectId = req.user?.oid;
+
+    let user = null;
+
+    if (azureObjectId) {
+      user = await findUserRepo({ azureObjectId });
+    }
+
+    if (!user && azureEmail) {
+      user = await findUserRepo({ email: azureEmail });
+    }
+
     if (!user) {
       throw new AppError("User not found", 404);
     }
+
+    if (azureObjectId && !user.azureObjectId) {
+      user = await updateUserRepo(user._id, { azureObjectId });
+    }
+
+    const selectedCompanyId = req.cookies?.AC_CMP;
     const allCompanies = await findCompaniesRepo({});
+
+    const resolveSelectedCompany = (companies) => {
+      if (!Array.isArray(companies) || companies.length === 0) return null;
+
+      if (selectedCompanyId) {
+        const matchedCompany = companies.find(
+          (company) => company?._id?.toString() === selectedCompanyId
+        );
+        if (matchedCompany) return matchedCompany;
+      }
+
+      if (companies.length === 1) {
+        return companies[0];
+      }
+
+      return null;
+    };
+
     if (user.role === "superAdmin") {
       return res.json({
         user,
         companies: allCompanies,
+        selectedCompany: resolveSelectedCompany(allCompanies),
       });
     }
+
     const allowedCompanyIds = new Set(
-      user?.permissions?.map((p) => p.companyId?.toString() || p.companyId)
+      user?.permissions
+        ?.map((p) => p.company?._id || p.companyId || p.company)
+        .filter(Boolean)
+        .map((companyId) => companyId.toString())
     );
+
     const companies = allCompanies.filter((company) =>
-      allowedCompanyIds.has(company._id.toString())
+      allowedCompanyIds.has(company?._id?.toString())
     );
+
     return res.json({
       user,
       companies,
+      selectedCompany: resolveSelectedCompany(companies),
     });
   } catch (error) {
     next(error);
