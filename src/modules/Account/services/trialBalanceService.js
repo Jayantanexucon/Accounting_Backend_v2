@@ -53,11 +53,31 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
     throw new AppError("No accounts found for this company", 404, "getTrialBalance");
   }
 
+  // Get all journals up to the as-of date
+  const Journal = await (await import("../models/Journal.js")).getJournalModel();
+  const validJournals = await Journal.find({
+    date: { $lte: dateAsOf },
+    companyId,
+    status: { $in: ["Posted", "Approved"] } // optionally restrict to posted
+  })
+    .select("_id date number voucherType sourceType referenceNumber partyName externalDocNo createdAt")
+    .lean();
+
+  const journalIds = validJournals.map(j => j._id);
+  const journalsMap = new Map(validJournals.map(j => [j._id.toString(), j]));
+
   // Get all journal lines up to the as-of date
   const JournalLine = await getJournalLineModel();
-  const journalLines = await JournalLine.find({
-    journalDate: { $lte: dateAsOf },
+  const rawJournalLines = await JournalLine.find({
+    journalId: { $in: journalIds },
+    companyId
   }).lean();
+
+  // Attach journal reference to lines for uniform handling if needed
+  const journalLines = rawJournalLines.map(line => ({
+    ...line,
+    journalId: journalsMap.get(line.journalId?.toString())
+  }));
 
   // Group journal lines by account
   const linesByAccount = new Map();

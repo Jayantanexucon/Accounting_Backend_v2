@@ -385,21 +385,33 @@ export const getLedger = async (req, res, next) => {
       .sort({ createdAt: 1 })
       .lean();
 
-    const filteredLines = lines.filter((line) => {
-      const journalDate = new Date(line.journalId?.date || line.createdAt);
-      if (startDate && journalDate < new Date(startDate)) return false;
-      if (endDate) {
-        const upper = new Date(endDate);
-        upper.setHours(23, 59, 59, 999);
-        if (journalDate > upper) return false;
-      }
-      return Boolean(line.journalId);
-    });
-
-    let runningBalance =
+    let openingBalance =
       `${account.openingType}`.toLowerCase() === "debit"
         ? Number(account.openingBalance || 0)
         : -Number(account.openingBalance || 0);
+
+    const filteredLines = [];
+    const start = startDate ? new Date(startDate) : null;
+    const end = endDate ? new Date(endDate) : null;
+    if (end) end.setHours(23, 59, 59, 999);
+
+    for (const line of lines) {
+      if (!line.journalId) continue;
+      const journalDate = new Date(line.journalId.date || line.createdAt);
+      if (Number.isNaN(journalDate.getTime())) continue;
+
+      if (start && journalDate < start) {
+        // Add to true opening balance
+        const debit = Number(line.debitAmount || 0);
+        const credit = Number(line.creditAmount || 0);
+        openingBalance += debit - credit;
+      } else {
+        if (end && journalDate > end) continue;
+        filteredLines.push(line);
+      }
+    }
+
+    let runningBalance = openingBalance;
 
     const entries = filteredLines.map((line) => {
       const debit = Number(line.debitAmount || 0);
@@ -427,8 +439,8 @@ export const getLedger = async (req, res, next) => {
       data: {
         account,
         entries,
-        openingBalance: Number(account.openingBalance || 0),
-        openingType: account.openingType,
+        openingBalance: Math.abs(openingBalance),
+        openingType: openingBalance >= 0 ? "debit" : "credit",
         closingBalance: Math.abs(runningBalance),
         closingType: runningBalance >= 0 ? "debit" : "credit",
       },

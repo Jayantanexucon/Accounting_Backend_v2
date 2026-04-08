@@ -53,17 +53,31 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     })
     .lean();
 
-  const filteredLines = journalLines.filter((line) => {
-    const journalDate = new Date(line.journalId?.date || line.createdAt);
-    if (Number.isNaN(journalDate.getTime())) return false;
-    if (startDate && journalDate < new Date(startDate)) return false;
-    if (endDate) {
-      const upper = new Date(endDate);
-      upper.setHours(23, 59, 59, 999);
-      if (journalDate > upper) return false;
+  let openingBalance = account.openingBalance || 0;
+  const filteredLines = [];
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+
+  for (const line of journalLines) {
+    if (!line.journalId) continue;
+    const journalDate = new Date(line.journalId.date || line.createdAt);
+    if (Number.isNaN(journalDate.getTime())) continue;
+
+    if (start && journalDate < start) {
+      // Add to true opening balance
+      const debit = line.debitAmount || 0;
+      const credit = line.creditAmount || 0;
+      if (account.openingType === "Debit") {
+        openingBalance += debit - credit;
+      } else {
+        openingBalance += credit - debit;
+      }
+    } else {
+      if (end && journalDate > end) continue;
+      filteredLines.push(line);
     }
-    return Boolean(line.journalId);
-  });
+  }
 
   const sortedLines = filteredLines.sort(
     (a, b) => new Date(a.journalId?.date || a.createdAt) - new Date(b.journalId?.date || b.createdAt)
@@ -74,7 +88,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
   }
 
   // Build ledger transactions with running balance
-  let runningBalance = account.openingBalance || 0;
+  let runningBalance = openingBalance;
   const transactions = [];
 
   for (const line of sortedLines) {
@@ -104,12 +118,12 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     });
   }
 
-  // Compute account totals
+  // Compute account totals for the CURRENT period view
   const { totalDebit, totalCredit } = sumJournalLineAmounts(filteredLines, "debitAmount", "creditAmount");
 
   const closingBalance = account.openingType === "Debit"
-    ? account.openingBalance + (totalDebit - totalCredit)
-    : account.openingBalance + (totalCredit - totalDebit);
+    ? openingBalance + (totalDebit - totalCredit)
+    : openingBalance + (totalCredit - totalDebit);
 
   const report = {
     account: {
@@ -125,7 +139,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       endDate,
     },
     summary: {
-      openingBalance: account.openingBalance || 0,
+      openingBalance: openingBalance,
       totalDebit,
       totalCredit,
       closingBalance,
