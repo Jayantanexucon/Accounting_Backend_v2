@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const journalLineSchema = new mongoose.Schema(
   {
@@ -51,6 +51,6 @@ journalLineSchema.index({ journalId: 1, accountId: 1 });
 journalLineSchema.index({ companyId: 1, accountId: 1 });
 
 export const getJournalLineModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.JournalLine || db.model("JournalLine", journalLineSchema);
 };

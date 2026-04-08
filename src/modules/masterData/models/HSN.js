@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const HSNSchema = new mongoose.Schema(
   {
@@ -68,6 +68,6 @@ const HSNSchema = new mongoose.Schema(
 HSNSchema.index({ companyId: 1, hsnCode: 1, serviceType: 1 }, { unique: true });
 
 export const getHSNModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.HSN || db.model("HSN", HSNSchema);
 };

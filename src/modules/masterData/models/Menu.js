@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const MenuSchema = new mongoose.Schema(
   {
@@ -45,6 +45,6 @@ const MenuSchema = new mongoose.Schema(
 );
 
 export const getMenuModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.Menu || db.model("Menu", MenuSchema);
 };

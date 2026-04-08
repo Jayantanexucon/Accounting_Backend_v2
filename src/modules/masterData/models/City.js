@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const CitySchema = new mongoose.Schema(
   {
@@ -51,6 +51,6 @@ const CitySchema = new mongoose.Schema(
 CitySchema.index({ state: 1, cityName: 1 }, { unique: true });
 
 export const getCityModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.City || db.model("City", CitySchema);
 };

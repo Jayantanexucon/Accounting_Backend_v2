@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const CurrencySchema = new mongoose.Schema(
   {
@@ -37,6 +37,6 @@ const CurrencySchema = new mongoose.Schema(
 );
 
 export const getCurrencyModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.Currency || db.model("Currency", CurrencySchema);
 };

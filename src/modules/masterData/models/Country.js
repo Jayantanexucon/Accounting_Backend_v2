@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const CountrySchema = new mongoose.Schema(
   {
@@ -41,6 +41,6 @@ const CountrySchema = new mongoose.Schema(
 );
 
 export const getCountryModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.Country || db.model("Country", CountrySchema);
 };

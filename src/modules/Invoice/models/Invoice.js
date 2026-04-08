@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectInvoiceDB } from "../../../config/db/invoice.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const invoiceLineItemSchema = new mongoose.Schema({
   itemId: { type: String },
@@ -222,6 +222,6 @@ invoiceSchema.pre("save", function (next) {
 });
 
 export const getInvoiceModel = async () => {
-  const db = await connectInvoiceDB();
+  const db = getDatabase("invoice");
   return db.models.Invoice || db.model("Invoice", invoiceSchema);
 };

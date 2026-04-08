@@ -1,5 +1,6 @@
 import ApiResponse from "../utils/ApiResponse.js";
 import AppError from "../utils/AppError.js";
+import { getConnectedModules } from "../config/databases.js";
 
 /**
  * System Controller
@@ -13,18 +14,15 @@ import AppError from "../utils/AppError.js";
  */
 export const getAvailableModules = (req, res, next) => {
   try {
-    // Parse available modules from environment variable
-    const availableModulesStr = (process.env.AVAILABLE_MODULE || "")
-      .split(",")
-      .map((m) => m.trim().toLowerCase())
-      .filter((m) => m.length > 0);
+    // Get connected modules from database configuration
+    const connectedModules = getConnectedModules();
 
     // Define module metadata
     const moduleMetadata = {
       accounting: {
         name: "Accounting Module",
         path: "/api/accounting",
-        enabled: availableModulesStr.includes("accounting"),
+        enabled: connectedModules.includes("accounting"),
         description: "Core accounting features including accounts, journals, groups, and financial reporting",
         features: [
           "Account management",
@@ -35,12 +33,12 @@ export const getAvailableModules = (req, res, next) => {
           "Account groups with Schedule III classification",
         ],
         database: "accounting_db",
-        status: availableModulesStr.includes("accounting") ? "active" : "disabled",
+        status: connectedModules.includes("accounting") ? "active" : "disabled",
       },
       invoice: {
         name: "Invoice Module",
         path: "/api/invoice",
-        enabled: availableModulesStr.includes("invoice"),
+        enabled: connectedModules.includes("invoice"),
         description: "Invoice and purchase order management with milestones and payment tracking",
         features: [
           "Invoice creation and management",
@@ -52,7 +50,7 @@ export const getAvailableModules = (req, res, next) => {
           "Cross-database transactions",
         ],
         database: "invoice_db",
-        status: availableModulesStr.includes("invoice") ? "active" : "disabled",
+        status: connectedModules.includes("invoice") ? "active" : "disabled",
       },
       auth: {
         name: "Authentication Module",
@@ -112,9 +110,9 @@ export const getAvailableModules = (req, res, next) => {
     };
 
     // Build response
-    const enabledModules = availableModulesStr.filter((m) => moduleMetadata[m]);
+    const enabledOptionalModules = connectedModules.filter((m) => ["accounting", "invoice"].includes(m));
     const coreModules = ["auth", "users", "companies", "masterData"]; // Always available
-    const allAvailableModules = [...new Set([...coreModules, ...enabledModules])];
+    const allAvailableModules = [...new Set([...coreModules, ...enabledOptionalModules])];
 
     const response = {
       server: {
@@ -124,7 +122,7 @@ export const getAvailableModules = (req, res, next) => {
       modules: {
         available: allAvailableModules,
         count: allAvailableModules.length,
-        enabledOptionalModules: enabledModules,
+        enabledOptionalModules: enabledOptionalModules,
         coreModules: coreModules,
       },
       details: {},
@@ -149,7 +147,7 @@ export const getAvailableModules = (req, res, next) => {
           path: moduleMetadata[module].path,
           enabled: false,
           status: "disabled",
-          reason: "Not enabled in AVAILABLE_MODULE environment variable",
+          reason: "Not enabled in AVAILABLE_MODULES environment variable",
         };
       }
     }
@@ -181,28 +179,24 @@ export const getModuleStatus = (req, res, next) => {
       });
     }
 
-    const availableModulesStr = (process.env.AVAILABLE_MODULE || "")
-      .split(",")
-      .map((m) => m.trim().toLowerCase())
-      .filter((m) => m.length > 0);
-
+    const connectedModules = getConnectedModules();
     const moduleName = module.toLowerCase().trim();
     const coreModules = ["auth", "users", "companies", "masterData"];
     
     // Check if module is available
     const isCore = coreModules.includes(moduleName);
-    const isOptional = availableModulesStr.includes(moduleName);
-    const isEnabled = isCore || isOptional;
+    const isConnected = connectedModules.includes(moduleName);
+    const isEnabled = isCore || isConnected;
 
     const status = {
       module: moduleName,
       enabled: isEnabled,
-      type: isCore ? "core" : isOptional ? "optional" : "unknown",
+      type: isCore ? "core" : isConnected ? "optional" : "unknown",
       status: isEnabled ? "active" : "disabled",
     };
 
     if (!isEnabled) {
-      status.message = `Module "${moduleName}" is not available. Enable it by adding to AVAILABLE_MODULE environment variable.`;
+      status.message = `Module "${moduleName}" is not available. Enable it by adding to AVAILABLE_MODULES environment variable.`;
     } else {
       status.message = `Module "${moduleName}" is available and active.`;
     }
@@ -223,10 +217,7 @@ export const getModuleStatus = (req, res, next) => {
  */
 export const getSystemHealth = (req, res, next) => {
   try {
-    const availableModulesStr = (process.env.AVAILABLE_MODULE || "")
-      .split(",")
-      .map((m) => m.trim().toLowerCase())
-      .filter((m) => m.length > 0);
+    const connectedModules = getConnectedModules();
 
     const health = {
       server: {
@@ -237,30 +228,33 @@ export const getSystemHealth = (req, res, next) => {
         timestamp: new Date().toISOString(),
       },
       databases: {
-        core: {
-          user_db: { required: true, optional: false },
-          company_db: { required: true, optional: false },
-          audit_db: { required: true, optional: false },
-          master_db: { required: true, optional: false },
-        },
-        optional: {
-          invoice_db: {
-            required: false,
-            optional: true,
-            enabled: availableModulesStr.includes("invoice"),
-          },
-          accounting_db: {
-            required: false,
-            optional: true,
-            enabled: availableModulesStr.includes("accounting"),
-          },
-        },
+        connected: connectedModules,
+        count: connectedModules.length,
+        details: {},
       },
       modules: {
-        enabled: availableModulesStr.length > 0 ? availableModulesStr : [],
-        count: availableModulesStr.length,
+        coreModules: ["auth", "users", "companies", "masterData"],
+        optionalModules: connectedModules.filter((m) => ["accounting", "invoice"].includes(m)),
       },
     };
+
+    // Add database status details
+    const dbMapping = {
+      user: "user_db",
+      company: "company_db",
+      audit: "audit_db",
+      master: "master_db",
+      invoice: "invoice_db",
+      accounting: "accounting_db",
+    };
+
+    for (const [moduleName, dbName] of Object.entries(dbMapping)) {
+      health.databases.details[dbName] = {
+        module: moduleName,
+        connected: connectedModules.includes(moduleName),
+        status: connectedModules.includes(moduleName) ? "healthy" : "disconnected",
+      };
+    }
 
     new ApiResponse({
       statusCode: 200,

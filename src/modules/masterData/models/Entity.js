@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const EntitySchema = new mongoose.Schema(
   {
@@ -46,6 +46,6 @@ const EntitySchema = new mongoose.Schema(
 );
 
 export const getEntityModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.Entity || db.model("Entity", EntitySchema);
 };
