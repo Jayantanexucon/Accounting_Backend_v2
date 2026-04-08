@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectInvoiceDB } from "../../../config/db/invoice.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const poLineItemSchema = new mongoose.Schema({
   itemId: { type: String },
@@ -147,6 +147,6 @@ purchaseOrderSchema.index({ companyId: 1, status: 1 });
 purchaseOrderSchema.index({ companyId: 1, poDate: -1 });
 
 export const getPurchaseOrderModel = async () => {
-  const db = await connectInvoiceDB();
+  const db = getDatabase("invoice");
   return db.models.PurchaseOrder || db.model("PurchaseOrder", purchaseOrderSchema);
 };

@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const VendorSchema = new mongoose.Schema(
   {
@@ -145,6 +145,6 @@ const VendorSchema = new mongoose.Schema(
 );
 
 export const getVendorModel = async () => {
-  const db = await connectMasterDB();
+  const db = getDatabase("master");
   return db.models.Vendor || db.model("Vendor", VendorSchema);
 };

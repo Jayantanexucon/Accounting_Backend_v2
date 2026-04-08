@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const accountSchema = new mongoose.Schema(
   {
@@ -140,6 +140,6 @@ accountSchema.index(
 );
 
 export const getAccountModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.Account || db.model("Account", accountSchema);
 };

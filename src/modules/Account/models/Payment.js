@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -93,6 +93,6 @@ paymentSchema.index({ paymentDate: -1, status: 1 });
 paymentSchema.index({ clientId: 1, paymentDate: -1 });
 
 export const getPaymentModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.Payment || db.model("Payment", paymentSchema);
 };

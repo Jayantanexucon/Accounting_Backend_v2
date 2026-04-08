@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const configSchema = new mongoose.Schema(
   {
@@ -29,6 +29,6 @@ const configSchema = new mongoose.Schema(
 configSchema.index({ key: 1, companyId: 1 }, { unique: true, sparse: true });
 
 export const getConfigModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.Config || db.model("Config", configSchema);
 };

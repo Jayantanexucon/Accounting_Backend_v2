@@ -2,12 +2,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import passport from "passport";
-import { connectUserDB } from "./config/db/user.db.js";
-import { connectInvoiceDB } from "./config/db/invoice.db.js";
-import { connectCompanyDB } from "./config/db/company.db.js";
-import { connectAccountingDB } from "./config/db/accounting.db.js";
-import { connectAuditDB } from "./config/db/audit.db.js";
-import { connectMasterDB } from "./config/db/master.db.js";
+import { initializeDatabaseConnections, getConnectedModules } from "./config/databases.js";
 import errorHandler from "./utils/errorHandler.js";
 import { initializeEntities } from "./utils/initializeEntities.js";
 
@@ -40,34 +35,8 @@ app.use(passport.initialize());
 // Initialize all database connections
 export const initializeDatabases = async () => {
   try {
-    // Parse available modules from environment variable
-    const availableModules = (process.env.AVAILABLE_MODULE || "")
-      .split(",")
-      .map((m) => m.trim().toLowerCase())
-      .filter((m) => m.length > 0);
-
-    console.log(`📦 Initializing modules: ${availableModules.length > 0 ? availableModules.join(", ") : "core only"}`);
-
-    // Always connect core databases
-    await connectUserDB();
-    await connectCompanyDB();
-    await connectAuditDB();
-    await connectMasterDB();
-
-    // Conditionally connect module-specific databases
-    if (availableModules.includes("invoice")) {
-      await connectInvoiceDB();
-    } else {
-      console.log("⏭️  Invoice module disabled - skipping invoice_db connection");
-    }
-
-    if (availableModules.includes("accounting")) {
-      await connectAccountingDB();
-    } else {
-      console.log("⏭️  Accounting module disabled - skipping accounting_db connection");
-    }
-
-    console.log("✅ All available databases connected successfully");
+    // Initialize all databases from AVAILABLE_MODULES
+    await initializeDatabaseConnections();
 
     // Initialize default entities after all databases are connected
     await initializeEntities();
@@ -92,29 +61,16 @@ app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
 
 // Conditionally register module-specific routes
-const availableModules = (process.env.AVAILABLE_MODULE || "")
-  .split(",")
-  .map((m) => m.trim().toLowerCase())
-  .filter((m) => m.length > 0);
+const connectedModules = getConnectedModules();
 
-console.log("hiiiiiiiiiiiii");
-console.log(process.env.AVAILABLE_MODULE);
-
-
-console.log(availableModules);
-
-
-if (availableModules.includes("accounting")) {
-  console.log('====================================');
-  console.log("accounting module availavle");
-  console.log('====================================');
-  app.use("/api/accounting", accountingRoutes);
+if (connectedModules.includes("accounting")) {
   console.log("✅ Accounting module routes registered at /api/accounting");
+  app.use("/api/accounting", accountingRoutes);
 }
 
-if (availableModules.includes("invoice")) {
-  app.use("/api/invoice", invoiceRoutes);
+if (connectedModules.includes("invoice")) {
   console.log("✅ Invoice module routes registered at /api/invoice");
+  app.use("/api/invoice", invoiceRoutes);
 }
 
 // 404 Handler

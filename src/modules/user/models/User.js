@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
-import { connectUserDB } from "../../../config/db/user.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const permissionsSchema = new Schema(
   {
@@ -55,6 +55,6 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
 };
 
 export const getUserModel = async () => {     
-  const db = await connectUserDB();
+  const db = getDatabase("user");
   return db.models.User || db.model("User", userSchema);
 };    
