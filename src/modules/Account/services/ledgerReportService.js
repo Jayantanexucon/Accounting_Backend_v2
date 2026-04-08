@@ -1,12 +1,8 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
-import { getJournalModel } from "../models/Journal.js";
 import {
-  filterJournalLinesByPeriod,
-  groupJournalLinesByAccount,
   sumJournalLineAmounts,
-  buildAccountBalanceForReport,
 } from "../utils/balanceComputation.util.js";
 
 /**
@@ -46,27 +42,31 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     throw new AppError("Account does not belong to this company", 403, "getLedgerReport");
   }
 
-  // Get journal lines for this account in the period
   const JournalLine = await getJournalLineModel();
   const journalLines = await JournalLine.find({
-    accountId: accountId,
-    journalDate: {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate),
-    },
+    accountId,
+    companyId,
   })
     .populate({
       path: "journalId",
-      select: "journalNumber date status voucherType approvalStatus",
+      select: "number date narration sourceType referenceNumber partyName externalDocNo createdAt voucherType status approvalStatus",
     })
     .lean();
 
-  // Get journal model for posting status validation
-  const Journal = await getJournalModel();
+  const filteredLines = journalLines.filter((line) => {
+    const journalDate = new Date(line.journalId?.date || line.createdAt);
+    if (Number.isNaN(journalDate.getTime())) return false;
+    if (startDate && journalDate < new Date(startDate)) return false;
+    if (endDate) {
+      const upper = new Date(endDate);
+      upper.setHours(23, 59, 59, 999);
+      if (journalDate > upper) return false;
+    }
+    return Boolean(line.journalId);
+  });
 
-  // Sort journal lines chronologically
-  const sortedLines = journalLines.sort((a, b) =>
-    new Date(a.journalDate) - new Date(b.journalDate)
+  const sortedLines = filteredLines.sort(
+    (a, b) => new Date(a.journalId?.date || a.createdAt) - new Date(b.journalId?.date || b.createdAt)
   );
 
   if (reverseOrder) {
@@ -89,19 +89,23 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     }
 
     transactions.push({
-      journalDate: line.journalDate,
+      journalDate: line.journalId?.date || line.createdAt,
       voucherType: line.journalId?.voucherType,
-      journalNumber: line.journalId?.journalNumber,
-      reference: line.reference,
-      narration: line.narration,
+      journalNumber: line.journalId?.number,
+      reference: line.journalId?.externalDocNo || line.journalId?.referenceNumber || "",
+      narration: line.journalId?.narration || line.description || "",
       debit: debit > 0 ? debit : 0,
       credit: credit > 0 ? credit : 0,
       runningBalance,
+      sourceType: line.journalId?.sourceType || "MANUAL",
+      referenceNumber: line.journalId?.referenceNumber || line.journalId?.number || "",
+      partyName: line.journalId?.partyName || "",
+      externalDocNo: line.journalId?.externalDocNo || "",
     });
   }
 
   // Compute account totals
-  const { totalDebit, totalCredit } = sumJournalLineAmounts(journalLines, "debitAmount", "creditAmount");
+  const { totalDebit, totalCredit } = sumJournalLineAmounts(filteredLines, "debitAmount", "creditAmount");
 
   const closingBalance = account.openingType === "Debit"
     ? account.openingBalance + (totalDebit - totalCredit)

@@ -25,7 +25,8 @@
     "passport": "^0.7.0",
     "passport-azure-ad": "^4.3.5",
     "pdfkit": "^0.13.0",
-    "pug": "^3.0.3"
+    "pug": "^3.0.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

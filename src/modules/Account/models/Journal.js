@@ -10,7 +10,7 @@ const journalSchema = new mongoose.Schema(
     },
     voucherType: {
       type: String,
-      enum: ["Journal Entry", "Receipt", "Payment", "Contra"],
+      enum: ["Journal Entry", "SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"],
       required: [true, "Voucher type is required"],
     },
     date: {
@@ -28,7 +28,7 @@ const journalSchema = new mongoose.Schema(
     },
     sourceType: {
       type: String,
-      enum: ["MANUAL", "INVOICE", "PAYMENT"],
+      enum: ["MANUAL", "INVOICE", "PAYMENT", "ADJUSTMENT", "EXCEL"],
       default: "MANUAL",
     },
     sourceId: String,
