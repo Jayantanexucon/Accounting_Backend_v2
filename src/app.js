@@ -61,7 +61,10 @@ app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
 
 // Conditionally register module-specific routes
-const connectedModules = getConnectedModules();
+const connectedModules = await getConnectedModules();
+console.log('====================================');
+console.log('Connected Modules:', connectedModules);
+console.log('====================================');
 
 if (connectedModules.includes("accounting")) {
   console.log("✅ Accounting module routes registered at /api/accounting");
