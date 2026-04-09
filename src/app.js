@@ -61,7 +61,10 @@ app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
 
 // Conditionally register module-specific routes
-const connectedModules = getConnectedModules();
+const connectedModules = await getConnectedModules();
+console.log('====================================');
+console.log('Connected Modules:', connectedModules);
+console.log('====================================');
 
 if (connectedModules.includes("accounting")) {
   console.log("✅ Accounting module routes registered at /api/accounting");
@@ -70,7 +73,7 @@ if (connectedModules.includes("accounting")) {
 
 if (connectedModules.includes("invoice")) {
   console.log("✅ Invoice module routes registered at /api/invoice");
-  app.use("/api/invoice", invoiceRoutes);
+  app.use("/api/invoices", invoiceRoutes);
 }
 
 // 404 Handler
@@ -85,3 +88,4 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 export default app;
+ 

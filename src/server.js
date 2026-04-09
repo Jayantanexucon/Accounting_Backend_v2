@@ -4,7 +4,7 @@ dotenv.config();
 import app, { initializeDatabases } from "./app.js";
 import { configurePassport } from "./config/passport.js";
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 
 const startServer = async () => {
   try {
