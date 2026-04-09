@@ -1,7 +1,11 @@
 import mongoose from "mongoose";
 
+import dotenv from "dotenv";
+
+dotenv.config();
+
 // Store all database connections
-const connections = {};
+let connections = {};
 
 /**
  * Initialize all database connections from AVAILABLE_MODULES in .env
@@ -73,8 +77,13 @@ export const getDatabase = (moduleName) => {
  * Get names of all connected modules
  * @returns {string[]} Array of module names
  */
-export const getConnectedModules = () => {
-  return Object.keys(connections);
+export const  getConnectedModules = async() => {
+
+  const connection1 = await initializeDatabaseConnections();
+  console.log('===================||=================');
+  console.log(connection1);
+  console.log('====================||================');
+  return Object.keys(connection1);
 };
 
 /**
@@ -87,3 +96,4 @@ export const isModuleConnected = (moduleName) => {
 };
 
 
+ 
