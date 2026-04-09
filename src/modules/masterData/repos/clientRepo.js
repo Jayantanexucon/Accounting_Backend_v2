@@ -25,6 +25,10 @@ export const createClientRepo = async (clientData) => {
 export const findClientRepo = async (filter, lean = true) => {
   try {
     const Client = await getClientModel();
+    // Normalize companyId in filter to string
+    if (filter.companyId) {
+      filter.companyId = String(filter.companyId);
+    }
     const query = Client.findOne(filter);
     if (lean) query.lean();
     return await query;
@@ -99,13 +103,22 @@ export const getPaginatedClientsRepo = async ({ companyId, page, limit }) => {
   try {
     const Client = await getClientModel();
     const skip = (page - 1) * limit;
-    const query = { companyId };
+    // Ensure companyId is treated as a string in the query
+    const query = { companyId: String(companyId) };
+
+    // Debug: Check all clients and their companyId values
+    const allClients = await Client.find({}).select({ companyId: 1, clientName: 1 }).lean();
+    console.log("DEBUG: All clients in DB:", allClients);
+    console.log("DEBUG: Query being used:", query);
 
     const totalCount = await Client.countDocuments(query);
+    console.log("DEBUG: Total count with query:", totalCount);
+
     const clients = await Client.find(query)
       .skip(skip)
       .limit(limit)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     return {
       clients,

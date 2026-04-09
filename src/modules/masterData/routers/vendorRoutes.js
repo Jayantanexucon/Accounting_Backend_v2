@@ -17,29 +17,14 @@ const router = express.Router();
 // All routes require authentication
 router.use(protect);
 
-// GET /api/vendor/search - Search vendors (must be before :companyId to avoid conflicts)
+// GET /api/vendor/search - Search vendors (must be before other routes to avoid conflicts)
 router.get(
   "/search",
   accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),
   searchVendorsController
 );
 
-// POST /api/vendor/:companyId - Add vendor with optional file uploads
-router.post(
-  "/:companyId",
-  upload.array("complianceDocs", 10),
-  accessControlMiddleware({ entityKey: "VENDOR", action: "CREATE" }),
-  addVendorController
-);
-
-// GET /api/vendor/:companyId - Get paginated vendors
-router.get(
-  "/:companyId",
-  accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),
-  getPaginatedVendorsController
-);
-
-// GET /api/vendor/details/:vendorId - Get vendor by ID
+// GET /api/vendor/details/:vendorId - Get vendor by ID (must be before /:companyId)
 router.get(
   "/details/:vendorId",
   accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),
@@ -66,6 +51,21 @@ router.put(
   "/complete/:vendorId",
   accessControlMiddleware({ entityKey: "VENDOR", action: "EDIT" }),
   completeVendorController
+);
+
+// POST /api/vendor/:companyId - Add vendor with optional file uploads
+router.post(
+  "/:companyId",
+  upload.array("complianceDocs", 10),
+  accessControlMiddleware({ entityKey: "VENDOR", action: "CREATE" }),
+  addVendorController
+);
+
+// GET /api/vendor/:companyId - Get paginated vendors (must be last since it matches any string)
+router.get(
+  "/:companyId",
+  accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),
+  getPaginatedVendorsController
 );
 
 export default router;

@@ -17,9 +17,9 @@ const router = express.Router();
 // All routes require authentication
 router.use(protect);
 
-// POST /api/client/create - Create client
+// POST /api/client/create/:companyId - Create client
 router.post(
-  "/create",
+  "/create/:companyId",
   accessControlMiddleware({ entityKey: "CLIENT", action: "CREATE" }),
   createClientController
 );

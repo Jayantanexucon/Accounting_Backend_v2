@@ -243,7 +243,7 @@ export const deleteClientController = async (req, res, next) => {
 
 export const getClientsPaginatedController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
+    const companyId  = req.query.companyId;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 

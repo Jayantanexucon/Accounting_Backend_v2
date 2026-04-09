@@ -67,9 +67,21 @@ export const getAllHSNController = async (req, res, next) => {
 
     if (!companyId) {
       throw new AppError("Company ID is required", 400, "getAllHSNController");
+      
     }
 
+    console.log("===================company==================");
+    
+
+    console.log(companyId);
+    
+
     const list = await getAllHSNRepo(companyId);
+
+    console.log("===================hsn list==================");
+
+    console.log(list);
+    
 
     return res.status(200).json(
       new ApiResponse({
@@ -88,6 +100,10 @@ export const getHSNController = async (req, res, next) => {
     const { companyId, hsnId } = req.params;
 
     const hsn = await findHSNByIdRepo(hsnId, companyId);
+    console.log("===============hsn list==============");
+    console.log(hsn);
+    
+    
     if (!hsn) {
       throw new AppError("HSN not found", 404, "getHSNController");
     }

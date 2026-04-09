@@ -160,18 +160,18 @@ export const initializeEntities = async () => {
         name: "HSN/SAC Codes",
         key: "HSN",
         isNavItem: true,
-        navLink: "master-data/hsn",
+        navLink: "master-data/hsn-codes",
         system: false,
         parentKey: "MASTER CONTROL",
       },
-      {
-        name: "Testing",
-        key: "TESTING",
-        isNavItem: true,
-        navLink: "master-data/entity",
-        system: false,
-        parentKey: "MASTER CONTROL",
-      },
+      // {
+      //   name: "Testing",
+      //   key: "TESTING",
+      //   isNavItem: true,
+      //   navLink: "master-data/entity",
+      //   system: false,
+      //   parentKey: "MASTER CONTROL",
+      // },
 
       // Admin Settings children
       // {

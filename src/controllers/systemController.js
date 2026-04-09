@@ -342,7 +342,7 @@ export const getUserAccessibleModules = async (req, res, next) => {
           { id: "clients", name: "Client Details", icon: "Users", path: "/api/masterData/client" },
           { id: "vendors", name: "Vendor", icon: "Briefcase", path: "/api/masterData/vendor" },
           { id: "hsn", name: "HSN/SAC Codes", icon: "Tag", path: "/api/masterData/hsn" },
-          { id: "entities", name: "Testing", icon: "BarChart", path: "/api/masterData/entity" },
+          // { id: "entities", name: "Testing", icon: "BarChart", path: "/api/masterData/entity" },
         ],
         database: "master_db",
         status: "active",

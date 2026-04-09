@@ -80,9 +80,9 @@ export const getDatabase = (moduleName) => {
 export const  getConnectedModules = async() => {
 
   const connection1 = await initializeDatabaseConnections();
-  console.log('===================||=================');
-  console.log(connection1);
-  console.log('====================||================');
+  // console.log('===================||=================');
+  // console.log(connection1);
+  // console.log('====================||================');
   return Object.keys(connection1);
 };
 

@@ -4,8 +4,8 @@ import { getDatabase } from "../../../config/databases.js";
 const VendorSchema = new mongoose.Schema(
   {
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
+      // ref: "Company",
       required: true,
       index: true,
     },
