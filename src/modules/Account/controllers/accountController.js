@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
@@ -55,12 +56,15 @@ const computeClosingForAccount = (account, totalDebit = 0, totalCredit = 0) => {
 const attachAccountBalances = async (accounts = [], companyId) => {
   if (!accounts.length) return [];
 
+  // Convert companyId to ObjectId for aggregation $match (string won't match ObjectId fields)
+  const companyObjectId = new mongoose.Types.ObjectId(companyId);
+
   const JournalLine = await getJournalLineModel();
   const balances = await JournalLine.aggregate([
     {
       $match: {
-        companyId,
-        accountId: { $in: accounts.map((account) => account._id) },
+        companyId: companyObjectId,
+        accountId: { $in: accounts.map((account) => new mongoose.Types.ObjectId(account._id)) },
       },
     },
     {

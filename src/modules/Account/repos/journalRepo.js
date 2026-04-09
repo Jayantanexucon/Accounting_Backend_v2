@@ -2,13 +2,17 @@ import AppError from "../../../utils/AppError.js";
 import mongoose from "mongoose";
 import { getJournalModel } from "../models/Journal.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
+import { getAccountModel } from "../models/Account.js";
 
 const attachLinesToJournals = async (journals = []) => {
   if (!journals.length) return journals;
 
   const JournalLine = await getJournalLineModel();
+  // Ensure Account model is registered on the DB connection before populate
+  await getAccountModel();
   const journalIds = journals.map((journal) => journal._id);
   const lines = await JournalLine.find({ journalId: { $in: journalIds } })
+    .populate({ path: "accountId", select: "name code" })
     .sort({ lineNumber: 1, createdAt: 1 })
     .lean();
 
@@ -18,14 +22,21 @@ const attachLinesToJournals = async (journals = []) => {
     if (!linesByJournalId.has(key)) {
       linesByJournalId.set(key, []);
     }
+    // Resolve account name/code: prefer denormalized fields, fallback to populated accountId
+    const populatedAccount = line.accountId && typeof line.accountId === "object" ? line.accountId : null;
+    const accountId = populatedAccount?._id || line.accountId;
+    const accountName = line.accountName || populatedAccount?.name || null;
+    const accountCode = line.accountCode || populatedAccount?.code || null;
+
     linesByJournalId.get(key).push({
       ...line,
+      accountId: accountId,
       debit: Number(line.debitAmount || 0),
       credit: Number(line.creditAmount || 0),
       account: {
-        _id: line.accountId,
-        name: line.accountName,
-        code: line.accountCode,
+        _id: accountId,
+        name: accountName,
+        code: accountCode,
       },
     });
   }
@@ -35,6 +46,7 @@ const attachLinesToJournals = async (journals = []) => {
     lines: linesByJournalId.get(journal._id.toString()) || [],
   }));
 };
+
 
 export const createJournalRepo = async (journalData) => {
   try {

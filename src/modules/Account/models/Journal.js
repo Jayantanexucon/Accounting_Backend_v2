@@ -10,7 +10,7 @@ const journalSchema = new mongoose.Schema(
     },
     voucherType: {
       type: String,
-      enum: ["Journal Entry", "SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"],
+      enum: [,"SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"],
       required: [true, "Voucher type is required"],
     },
     date: {
