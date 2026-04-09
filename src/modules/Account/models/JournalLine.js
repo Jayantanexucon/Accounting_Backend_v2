@@ -18,8 +18,7 @@ const journalLineSchema = new mongoose.Schema(
     accountCode: String,
     accountName: String,
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -33,12 +32,10 @@ const journalLineSchema = new mongoose.Schema(
     },
     description: String,
     linkedToClientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Client",
+      type: String,
     },
     linkedToVendorId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Vendor",
+      type: String,
     },
     lineNumber: Number,
   },

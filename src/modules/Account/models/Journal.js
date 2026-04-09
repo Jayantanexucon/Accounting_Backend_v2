@@ -22,8 +22,7 @@ const journalSchema = new mongoose.Schema(
     externalDocNo: String,
     narration: String,
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -53,19 +52,16 @@ const journalSchema = new mongoose.Schema(
       default: "Pending",
     },
     approvedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
     approvalDate: Date,
     approvalComments: String,
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
     isDeleted: {
       type: Boolean,

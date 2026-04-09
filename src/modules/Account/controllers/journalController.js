@@ -207,7 +207,7 @@ export const createJournal = async (req, res, next) => {
       totalCredit,
       status: "Posted",
       approvalStatus: "Approved",
-      createdBy: req.user?._id,
+      createdBy: req.user?.id,
     };
 
     const journal = await createJournalRepo(journalData);
@@ -307,7 +307,7 @@ export const updateJournal = async (req, res, next) => {
       throw new AppError("Journal ID is required", 400, "updateJournal");
     }
 
-    const { updatedJournal, updateData, oldJournal } = await applyJournalUpdate(id, req.body, req.user?._id);
+    const { updatedJournal, updateData, oldJournal } = await applyJournalUpdate(id, req.body, req.user?.id);
 
     await createAuditLog({
       userId: req.user?.id,
@@ -525,7 +525,7 @@ export const requestJournalEditApproval = async (req, res, next) => {
       journalId: id,
       journalNumber: journal.number,
       type: "edit",
-      requestedBy: req.user?._id,
+      requestedBy: req.user?.id,
       requestComment,
       requestedPayload: req.body,
     });
@@ -564,7 +564,7 @@ export const requestJournalDeleteApproval = async (req, res, next) => {
       journalId: id,
       journalNumber: journal.number,
       type: "delete",
-      requestedBy: req.user?._id,
+      requestedBy: req.user?.id,
       requestComment,
       requestedPayload: null,
     });
@@ -616,8 +616,8 @@ export const updateJournalApprovalRequest = async (req, res, next) => {
     const updatedRequest = await updateJournalApprovalRequestRepo(requestId, {
       status: status === "approved" ? "completed" : "rejected",
       ...(status === "approved"
-        ? { approvedBy: req.user?._id, approvedAt: new Date(), completedAt: new Date() }
-        : { rejectedBy: req.user?._id, rejectedAt: new Date() }),
+        ? { approvedBy: req.user?.id, approvedAt: new Date(), completedAt: new Date() }
+        : { rejectedBy: req.user?.id, rejectedAt: new Date() }),
     });
 
     new ApiResponse({

@@ -11,8 +11,7 @@ const configSchema = new mongoose.Schema(
     value: mongoose.Schema.Types.Mixed,
     description: String,
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       indexed: true,
     },
     isActive: {

@@ -4,8 +4,7 @@ import { getDatabase } from "../../../config/databases.js";
 const journalApprovalRequestSchema = new mongoose.Schema(
   {
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: true,
     },
     journalId: {
@@ -29,8 +28,7 @@ const journalApprovalRequestSchema = new mongoose.Schema(
       default: "pending",
     },
     requestedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     requestComment: {
@@ -43,13 +41,11 @@ const journalApprovalRequestSchema = new mongoose.Schema(
       default: null,
     },
     approvedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       default: null,
     },
     rejectedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       default: null,
     },
     requestedAt: {

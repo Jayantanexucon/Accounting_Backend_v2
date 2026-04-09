@@ -4,20 +4,17 @@ import { getDatabase } from "../../../config/databases.js";
 const paymentSchema = new mongoose.Schema(
   {
     invoiceId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Invoice",
+      type: String,
       required: [true, "Invoice ID is required"],
       indexed: true,
     },
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
     clientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Client",
+      type: String,
     },
     amountPaid: {
       type: Number,
@@ -74,13 +71,11 @@ const paymentSchema = new mongoose.Schema(
       default: "NOT_RECONCILED",
     },
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
   },
   {

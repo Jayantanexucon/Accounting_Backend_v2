@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import multer from "multer";
 import XLSX from "xlsx";
 import AppError from "../../../utils/AppError.js";
@@ -252,9 +251,6 @@ export const uploadJournalExcel = async (req, res, next) => {
     }
 
     const { companyId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(companyId)) {
-      throw new AppError("Invalid company ID", 400, "uploadJournalExcel");
-    }
 
     const rawRows = parseWorkbookRows(req.file.buffer);
     if (!rawRows.length) {
@@ -289,10 +285,6 @@ export const confirmJournalExcel = async (req, res, next) => {
   try {
     const { companyId } = req.params;
     const { validEntries } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(companyId)) {
-      throw new AppError("Invalid company ID", 400, "confirmJournalExcel");
-    }
 
     if (!Array.isArray(validEntries) || validEntries.length === 0) {
       throw new AppError("No valid journal entries provided", 400, "confirmJournalExcel");
@@ -364,7 +356,7 @@ export const confirmJournalExcel = async (req, res, next) => {
           totalCredit,
           status: "Posted",
           approvalStatus: "Approved",
-          createdBy: req.user?._id,
+          createdBy: req.user?.id,
         });
 
         await createMultipleJournalLinesRepo(

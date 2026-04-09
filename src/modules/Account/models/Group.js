@@ -74,19 +74,16 @@ const groupSchema = new mongoose.Schema(
       },
     },
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
     isActive: {
       type: Boolean,
