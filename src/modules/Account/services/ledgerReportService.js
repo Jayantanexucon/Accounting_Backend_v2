@@ -1,12 +1,8 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
-import { getJournalModel } from "../models/Journal.js";
 import {
-  filterJournalLinesByPeriod,
-  groupJournalLinesByAccount,
   sumJournalLineAmounts,
-  buildAccountBalanceForReport,
 } from "../utils/balanceComputation.util.js";
 
 /**
@@ -46,43 +42,53 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     throw new AppError("Account does not belong to this company", 403, "getLedgerReport");
   }
 
-  // Get journal lines for this account in the period
-  const Journal = await getJournalModel();
-  const journalFilter = {
-    companyId,
-    date: {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate),
-    },
-  };
-  const journals = await Journal.find(journalFilter)
-    .select("number date status voucherType approvalStatus sourceType referenceNumber externalDocNo narration partyName")
-    .lean();
-  const journalIds = journals.map((journal) => journal._id);
-  const journalMap = new Map(journals.map((journal) => [journal._id.toString(), journal]));
-
   const JournalLine = await getJournalLineModel();
   const journalLines = await JournalLine.find({
     accountId,
     companyId,
-    journalId: { $in: journalIds },
-  }).lean();
+  })
+    .populate({
+      path: "journalId",
+      select: "number date narration sourceType referenceNumber partyName externalDocNo createdAt voucherType status approvalStatus",
+    })
+    .lean();
 
-  // Sort journal lines chronologically
-  const sortedLines = journalLines
-    .map((line) => ({
-      ...line,
-      journal: journalMap.get(line.journalId?.toString()) || null,
-    }))
-    .filter((line) => line.journal)
-    .sort((a, b) => new Date(a.journal.date) - new Date(b.journal.date));
+  let openingBalance = account.openingBalance || 0;
+  const filteredLines = [];
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+
+  for (const line of journalLines) {
+    if (!line.journalId) continue;
+    const journalDate = new Date(line.journalId.date || line.createdAt);
+    if (Number.isNaN(journalDate.getTime())) continue;
+
+    if (start && journalDate < start) {
+      // Add to true opening balance
+      const debit = line.debitAmount || 0;
+      const credit = line.creditAmount || 0;
+      if (account.openingType === "Debit") {
+        openingBalance += debit - credit;
+      } else {
+        openingBalance += credit - debit;
+      }
+    } else {
+      if (end && journalDate > end) continue;
+      filteredLines.push(line);
+    }
+  }
+
+  const sortedLines = filteredLines.sort(
+    (a, b) => new Date(a.journalId?.date || a.createdAt) - new Date(b.journalId?.date || b.createdAt)
+  );
 
   if (reverseOrder) {
     sortedLines.reverse();
   }
 
   // Build ledger transactions with running balance
-  let runningBalance = account.openingBalance || 0;
+  let runningBalance = openingBalance;
   const transactions = [];
 
   for (const line of sortedLines) {
@@ -97,23 +103,27 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     }
 
     transactions.push({
-      journalDate: line.journal.date,
-      voucherType: line.journal.voucherType,
-      journalNumber: line.journal.number,
-      reference: line.journal.referenceNumber || line.journal.externalDocNo || "",
-      narration: line.journal.narration || line.description || "",
+      journalDate: line.journalId?.date || line.createdAt,
+      voucherType: line.journalId?.voucherType,
+      journalNumber: line.journalId?.number,
+      reference: line.journalId?.externalDocNo || line.journalId?.referenceNumber || "",
+      narration: line.journalId?.narration || line.description || "",
       debit: debit > 0 ? debit : 0,
       credit: credit > 0 ? credit : 0,
       runningBalance,
+      sourceType: line.journalId?.sourceType || "MANUAL",
+      referenceNumber: line.journalId?.referenceNumber || line.journalId?.number || "",
+      partyName: line.journalId?.partyName || "",
+      externalDocNo: line.journalId?.externalDocNo || "",
     });
   }
 
-  // Compute account totals
-  const { totalDebit, totalCredit } = sumJournalLineAmounts(journalLines, "debitAmount", "creditAmount");
+  // Compute account totals for the CURRENT period view
+  const { totalDebit, totalCredit } = sumJournalLineAmounts(filteredLines, "debitAmount", "creditAmount");
 
-  const closingBalance = `${account.openingType}`.toLowerCase() === "debit"
-    ? account.openingBalance + (totalDebit - totalCredit)
-    : account.openingBalance + (totalCredit - totalDebit);
+  const closingBalance = account.openingType === "Debit"
+    ? openingBalance + (totalDebit - totalCredit)
+    : openingBalance + (totalCredit - totalDebit);
 
   const report = {
     account: {
@@ -129,7 +139,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       endDate,
     },
     summary: {
-      openingBalance: account.openingBalance || 0,
+      openingBalance: openingBalance,
       totalDebit,
       totalCredit,
       closingBalance,

@@ -21,12 +21,12 @@ export const createGroup = async (req, res, next) => {
       name,
       nature,
       balanceType,
-      companyId,
       scheduleMainHead: req.body.scheduleMainHead || null,
       scheduleGroup: req.body.scheduleGroup || null,
       scheduleLineItem: req.body.scheduleLineItem || null,
       noteNo: req.body.noteNo || null,
-      createdBy: req.user?._id,
+      companyId,
+      createdBy: req.user?.id,
     };
 
     const group = await createGroupRepo(groupData);
@@ -95,7 +95,7 @@ export const updateGroup = async (req, res, next) => {
     const { id } = req.params;
     const updateData = {
       ...req.body,
-      updatedBy: req.user?._id,
+      updatedBy: req.user?.id,
     };
 
     if (!id) {

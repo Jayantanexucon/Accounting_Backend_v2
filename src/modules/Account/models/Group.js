@@ -101,7 +101,7 @@ const groupSchema = new mongoose.Schema(
 // Unique index on name + companyId
 groupSchema.index({ name: 1, companyId: 1 }, { unique: true });
 
-// Derive scheduleMapping from Schedule III fields before validation.
+// Derive schedule mapping during validation without callback-style middleware.
 groupSchema.pre("validate", function () {
   if (this.scheduleMainHead && this.scheduleLineItem) {
     this.scheduleMapping = {
@@ -112,7 +112,17 @@ groupSchema.pre("validate", function () {
       lineItemName: this.scheduleLineItem,
       noteNo: this.noteNo || null,
     };
+    return;
   }
+
+  this.scheduleMapping = {
+    reportType: null,
+    primaryHead: null,
+    subHead: null,
+    lineItemCode: null,
+    lineItemName: null,
+    noteNo: this.noteNo || null,
+  };
 });
 
 export const getGroupModel = async () => {
