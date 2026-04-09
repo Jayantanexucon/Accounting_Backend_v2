@@ -96,7 +96,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
     const credit = line.creditAmount || 0;
 
     // Compute running balance based on account's normal balance
-    if (account.openingType === "Debit") {
+    if (`${account.openingType}`.toLowerCase() === "debit") {
       runningBalance += debit - credit;
     } else {
       runningBalance += credit - debit;
@@ -132,7 +132,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       accountName: account.name,
       groupName: account.groupName,
       nature: "Asset", // Would need to join group to get this properly
-      normalBalance: account.openingType,
+      normalBalance: `${account.openingType}`.toLowerCase() === "credit" ? "Credit" : "Debit",
     },
     period: {
       startDate,

@@ -15,6 +15,10 @@ import {
   requestJournalEditApproval,
   requestJournalDeleteApproval,
   updateJournalApprovalRequest,
+  getJournalApprovalRequests,
+  requestJournalEditApproval,
+  requestJournalDeleteApproval,
+  updateJournalApprovalRequest,
 } from "../controllers/journalController.js";
 
 const router = express.Router();

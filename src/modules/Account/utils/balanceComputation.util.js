@@ -1,5 +1,8 @@
 import AppError from "../../../utils/AppError.js";
 
+const normalizeBalanceType = (value = "Debit") =>
+  `${value}`.toLowerCase() === "credit" ? "Credit" : "Debit";
+
 /**
  * Balance Computation Utility
  * Core reusable logic for computing opening, movement, and closing balances
@@ -15,7 +18,7 @@ import AppError from "../../../utils/AppError.js";
  * @returns {number} Net balance for the period
  */
 export const computeMovement = (debitAmount, normalBalance) => {
-  if (normalBalance === "Debit") {
+  if (normalizeBalanceType(normalBalance) === "Debit") {
     return debitAmount || 0;
   } else {
     // Credit balance accounts: debit reduces balance
@@ -41,7 +44,9 @@ export const computeClosingBalance = (
   periodCredit = 0,
   normalBalance = "Debit"
 ) => {
-  if (normalBalance === "Debit") {
+  const balanceType = normalizeBalanceType(normalBalance);
+
+  if (balanceType === "Debit") {
     // For Debit balance accounts:
     // Opening balance = debit - credit
     // Add period movements = debit - credit
@@ -68,7 +73,7 @@ export const computeClosingBalance = (
  * @returns {Object} { debitSide, creditSide }
  */
 export const splitBalance = (balance = 0, normalBalance = "Debit") => {
-  if (normalBalance === "Debit") {
+  if (normalizeBalanceType(normalBalance) === "Debit") {
     return {
       debitSide: balance > 0 ? balance : 0,
       creditSide: balance < 0 ? Math.abs(balance) : 0,
@@ -261,6 +266,7 @@ export const buildAccountBalanceForReport = (
     scheduleGroup: account.scheduleMapping?.scheduleGroup,
     scheduleLineItem: account.scheduleMapping?.scheduleLineItem,
     normalBalance: account.openingType,
+    groupNature: account.groupId?.nature || account.groupNature || null,
     linkedClientId: account.linkedClientId,
     linkedVendorId: account.linkedVendorId,
     linkedPartyType: account.linkedPartyType,

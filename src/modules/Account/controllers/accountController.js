@@ -112,6 +112,8 @@ const getNextAccountCode = async (companyId, groupId) => {
     const lastCodeInRange = await getLastAccountCodeInRangeRepo(companyId, groupName);
     const lastUsedCode = Number(lastCodeInRange?.code || 0);
     const nextCode = lastUsedCode ? lastUsedCode + 1 : range.start;
+    const lastUsedCode = Number(lastCodeInRange?.code || 0);
+    const nextCode = lastUsedCode ? lastUsedCode + 1 : range.start;
 
     if (nextCode > range.end) {
       throw new AppError(`Account code range exhausted for group: ${groupName}`, 400, "getNextAccountCode");
@@ -128,6 +130,7 @@ export const createAccount = async (req, res, next) => {
   try {
     const { code, name, groupId, companyId, openingBalance, openingType, linkedClientId, linkedVendorId, description } =
       req.body;
+    const companyId = req.body.companyId || req.params.companyId;
 
     if (!name || !groupId || !companyId) {
       throw new AppError("Missing required fields: name, groupId, companyId", 400, "createAccount");
@@ -154,11 +157,21 @@ export const createAccount = async (req, res, next) => {
       }
     }
 
+    const group = await getGroupByIdRepo(groupId);
+    if (!group) {
+      throw new AppError("Group not found", 404, "createAccount");
+    }
+    if (String(group.companyId) !== String(companyId)) {
+      throw new AppError("Selected group does not belong to this company", 400, "createAccount");
+    }
+    const derivedProperties = deriveLedgerPropertiesFromGroup(group);
+
     const accountData = {
       code: accountCode,
       name,
       type: derivedProperties.type,
       groupId,
+      groupName: group.name,
       groupName: group.name,
       companyId,
       openingBalance: Number(openingBalance || 0),
@@ -212,9 +225,11 @@ export const getAllAccounts = async (req, res, next) => {
 
     const accounts = await getAccountsRepo(filter);
     const accountsWithBalances = await attachAccountBalances(accounts, companyId);
+    const accountsWithBalances = await attachAccountBalances(accounts, companyId);
 
     new ApiResponse({
       statusCode: 200,
+      data: accountsWithBalances,
       data: accountsWithBalances,
       message: "Accounts retrieved successfully",
     }).send(res);
@@ -376,7 +391,12 @@ export const getLedger = async (req, res, next) => {
     if (!account || String(account.companyId) !== String(companyId)) {
       throw new AppError("Account not found", 404, "getLedger");
     }
+    if (!account || String(account.companyId) !== String(companyId)) {
+      throw new AppError("Account not found", 404, "getLedger");
+    }
 
+    const JournalLine = await getJournalLineModel();
+    const lines = await JournalLine.find({
     const JournalLine = await getJournalLineModel();
     const lines = await JournalLine.find({
       accountId,

@@ -73,7 +73,7 @@ if (connectedModules.includes("accounting")) {
 
 if (connectedModules.includes("invoice")) {
   console.log("✅ Invoice module routes registered at /api/invoice");
-  app.use("/api/invoice", invoiceRoutes);
+  app.use("/api/invoices", invoiceRoutes);
 }
 
 // 404 Handler
@@ -88,3 +88,4 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 export default app;
+ 

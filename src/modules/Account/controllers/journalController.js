@@ -26,28 +26,31 @@ const generateJournalNumber = async (companyId, voucherType) => {
 
 export const createJournal = async (req, res, next) => {
   try {
-    const { voucherType, date, referenceNumber, narration, companyId, sourceType, sourceId, partyName, lines } =
+    const { voucherType, date, referenceNumber, externalDocNo, narration, companyId, sourceType, sourceId, partyName, lines } =
       req.body;
 
     if (!voucherType || !date || !companyId || !lines || lines.length === 0) {
       throw new AppError("Missing required fields: voucherType, date, companyId, lines", 400, "createJournal");
     }
 
-    const journalNumber = await generateJournalNumber(companyId, voucherType);
+    const normalizedVoucherType = normalizeVoucherType(voucherType);
+    const normalizedLines = await enrichJournalLines(normalizeJournalLines(lines));
+    const journalNumber = await generateJournalNumber(companyId, normalizedVoucherType);
 
     let totalDebit = 0;
     let totalCredit = 0;
 
-    lines.forEach((line) => {
+    normalizedLines.forEach((line) => {
       totalDebit += line.debitAmount || 0;
       totalCredit += line.creditAmount || 0;
     });
 
     const journalData = {
       number: journalNumber,
-      voucherType,
+      voucherType: normalizedVoucherType,
       date: new Date(date),
       referenceNumber,
+      externalDocNo,
       narration,
       companyId,
       sourceType: sourceType || "MANUAL",
@@ -58,11 +61,14 @@ export const createJournal = async (req, res, next) => {
       status: "Posted",
       approvalStatus: "Approved",
       createdBy: req.user?._id,
+      status: "Posted",
+      approvalStatus: "Approved",
+      createdBy: req.user?._id,
     };
 
     const journal = await createJournalRepo(journalData);
 
-    const journalLinesData = lines.map((line) => ({
+    const journalLinesData = normalizedLines.map((line) => ({
       journalId: journal._id,
       accountId: line.accountId,
       accountCode: line.accountCode,
@@ -153,15 +159,11 @@ export const getJournalById = async (req, res, next) => {
 export const updateJournal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
-
     if (!id) {
       throw new AppError("Journal ID is required", 400, "updateJournal");
     }
 
-    const oldJournal = await getJournalByIdRepo(id);
-
-    const updatedJournal = await updateJournalRepo(id, updateData);
+    const { updatedJournal, updateData, oldJournal } = await applyJournalUpdate(id, req.body, req.user?._id);
 
     await createAuditLog({
       userId: req.user?.id,
