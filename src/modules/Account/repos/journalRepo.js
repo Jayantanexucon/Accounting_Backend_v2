@@ -70,8 +70,6 @@ export const getJournalByIdRepo = async (id) => {
     const Journal = await getJournalModel();
     const journal = await Journal.findById(id).lean();
     if (!journal) return null;
-    const [journalWithLines] = await attachLinesToJournals([journal]);
-    return journalWithLines;
     if (!journal) return null;
     const [journalWithLines] = await attachLinesToJournals([journal]);
     return journalWithLines;

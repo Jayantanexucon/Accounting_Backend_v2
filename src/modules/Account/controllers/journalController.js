@@ -18,6 +18,160 @@ import {
   getJournalApprovalRequestsRepo,
   updateJournalApprovalRequestRepo,
 } from "../repos/journalApprovalRequestRepo.js";
+import { getAccountsRepo } from "../repos/accountRepo.js";
+
+const VALID_VOUCHER_TYPES = ["SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"];
+
+const normalizeVoucherType = (value = "") => {
+  const normalized = String(value).trim().toUpperCase();
+  const mappedValue =
+    {
+      "JOURNAL ENTRY": "JOURNAL",
+      JOURNAL: "JOURNAL",
+      RECEIPT: "RECEIPT",
+      PAYMENT: "PAYMENT",
+      CONTRA: "CONTRA",
+      SALES: "SALES",
+      PURCHASE: "PURCHASE",
+    }[normalized] || normalized;
+
+  if (!VALID_VOUCHER_TYPES.includes(mappedValue)) {
+    throw new AppError(
+      `Invalid voucherType. Expected one of: ${VALID_VOUCHER_TYPES.join(", ")}`,
+      400,
+      "normalizeVoucherType"
+    );
+  }
+
+  return mappedValue;
+};
+
+const normalizeJournalLines = (lines = []) =>
+  lines.map((line, index) => ({
+    ...line,
+    accountId: line.accountId || line.account?._id || line.account,
+    debitAmount: Number(line.debitAmount ?? line.debit ?? 0),
+    creditAmount: Number(line.creditAmount ?? line.credit ?? 0),
+    description: line.description || line.memo || "",
+    lineNumber: Number(line.lineNumber || index + 1),
+  }));
+
+const validateJournalLines = (lines = []) => {
+  if (!Array.isArray(lines) || lines.length < 2) {
+    throw new AppError("At least 2 journal lines are required", 400, "validateJournalLines");
+  }
+
+  let totalDebit = 0;
+  let totalCredit = 0;
+
+  lines.forEach((line, index) => {
+    if (!line.accountId) {
+      throw new AppError(`Account is required for line ${index + 1}`, 400, "validateJournalLines");
+    }
+    if (line.debitAmount < 0 || line.creditAmount < 0) {
+      throw new AppError(`Negative amounts are not allowed on line ${index + 1}`, 400, "validateJournalLines");
+    }
+    if (line.debitAmount === 0 && line.creditAmount === 0) {
+      throw new AppError(
+        `Either debit or credit amount is required on line ${index + 1}`,
+        400,
+        "validateJournalLines"
+      );
+    }
+    if (line.debitAmount > 0 && line.creditAmount > 0) {
+      throw new AppError(
+        `A line cannot contain both debit and credit amounts on line ${index + 1}`,
+        400,
+        "validateJournalLines"
+      );
+    }
+
+    totalDebit += line.debitAmount;
+    totalCredit += line.creditAmount;
+  });
+
+  if (Math.abs(totalDebit - totalCredit) > 0.001) {
+    throw new AppError("Journal entry is not balanced", 400, "validateJournalLines");
+  }
+
+  return { totalDebit, totalCredit };
+};
+
+const enrichJournalLines = async (lines = [], companyId) => {
+  const accountIds = [...new Set(lines.map((line) => String(line.accountId || "")).filter(Boolean))];
+  const accounts = await getAccountsRepo({
+    companyId,
+    _id: { $in: accountIds },
+  });
+
+  const accountMap = new Map(accounts.map((account) => [String(account._id), account]));
+
+  return lines.map((line, index) => {
+    const account = accountMap.get(String(line.accountId));
+    if (!account) {
+      throw new AppError(`Account not found for line ${index + 1}`, 400, "enrichJournalLines");
+    }
+
+    return {
+      ...line,
+      accountId: account._id,
+      accountCode: line.accountCode || account.code,
+      accountName: line.accountName || account.name,
+    };
+  });
+};
+
+const applyJournalUpdate = async (id, payload, userId) => {
+  const oldJournal = await getJournalByIdRepo(id);
+  if (!oldJournal) {
+    throw new AppError("Journal not found", 404, "applyJournalUpdate");
+  }
+
+  const companyId = payload.companyId || oldJournal.companyId;
+  const updateData = {
+    updatedBy: userId,
+  };
+
+  if (payload.voucherType !== undefined) updateData.voucherType = normalizeVoucherType(payload.voucherType);
+  if (payload.date !== undefined) updateData.date = new Date(payload.date);
+  if (payload.referenceNumber !== undefined) updateData.referenceNumber = payload.referenceNumber;
+  if (payload.externalDocNo !== undefined) updateData.externalDocNo = payload.externalDocNo;
+  if (payload.narration !== undefined) updateData.narration = payload.narration;
+  if (payload.sourceType !== undefined) updateData.sourceType = payload.sourceType;
+  if (payload.sourceId !== undefined) updateData.sourceId = payload.sourceId;
+  if (payload.partyName !== undefined) updateData.partyName = payload.partyName;
+
+  if (payload.lines !== undefined) {
+    const normalizedLines = normalizeJournalLines(payload.lines);
+    const enrichedLines = await enrichJournalLines(normalizedLines, companyId);
+    const { totalDebit, totalCredit } = validateJournalLines(enrichedLines);
+
+    updateData.totalDebit = totalDebit;
+    updateData.totalCredit = totalCredit;
+
+    await deleteJournalLinesByJournalRepo(id);
+    await createMultipleJournalLinesRepo(
+      enrichedLines.map((line) => ({
+        journalId: id,
+        accountId: line.accountId,
+        accountCode: line.accountCode,
+        accountName: line.accountName,
+        companyId,
+        debitAmount: line.debitAmount || 0,
+        creditAmount: line.creditAmount || 0,
+        description: line.description,
+        linkedToClientId: line.linkedToClientId || null,
+        linkedToVendorId: line.linkedToVendorId || null,
+        lineNumber: line.lineNumber,
+      }))
+    );
+  }
+
+  await updateJournalRepo(id, updateData);
+  const updatedJournal = await getJournalByIdRepo(id);
+
+  return { updatedJournal, updateData, oldJournal };
+};
 
 const generateJournalNumber = async (companyId, voucherType) => {
   const timestamp = Date.now();
@@ -34,16 +188,9 @@ export const createJournal = async (req, res, next) => {
     }
 
     const normalizedVoucherType = normalizeVoucherType(voucherType);
-    const normalizedLines = await enrichJournalLines(normalizeJournalLines(lines));
+    const normalizedLines = await enrichJournalLines(normalizeJournalLines(lines), companyId);
     const journalNumber = await generateJournalNumber(companyId, normalizedVoucherType);
-
-    let totalDebit = 0;
-    let totalCredit = 0;
-
-    normalizedLines.forEach((line) => {
-      totalDebit += line.debitAmount || 0;
-      totalCredit += line.creditAmount || 0;
-    });
+    const { totalDebit, totalCredit } = validateJournalLines(normalizedLines);
 
     const journalData = {
       number: journalNumber,
@@ -58,9 +205,6 @@ export const createJournal = async (req, res, next) => {
       partyName,
       totalDebit,
       totalCredit,
-      status: "Posted",
-      approvalStatus: "Approved",
-      createdBy: req.user?._id,
       status: "Posted",
       approvalStatus: "Approved",
       createdBy: req.user?._id,
