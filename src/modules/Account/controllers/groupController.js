@@ -22,6 +22,11 @@ export const createGroup = async (req, res, next) => {
       nature,
       balanceType,
       companyId,
+      scheduleMainHead: req.body.scheduleMainHead || null,
+      scheduleGroup: req.body.scheduleGroup || null,
+      scheduleLineItem: req.body.scheduleLineItem || null,
+      noteNo: req.body.noteNo || null,
+      createdBy: req.user?._id,
     };
 
     const group = await createGroupRepo(groupData);
@@ -88,7 +93,10 @@ export const getGroupById = async (req, res, next) => {
 export const updateGroup = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = {
+      ...req.body,
+      updatedBy: req.user?._id,
+    };
 
     if (!id) {
       throw new AppError("Group ID is required", 400, "updateGroup");
