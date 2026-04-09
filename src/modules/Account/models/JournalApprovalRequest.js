@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const journalApprovalRequestSchema = new mongoose.Schema(
   {
@@ -56,16 +56,26 @@ const journalApprovalRequestSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
-    approvedAt: Date,
-    rejectedAt: Date,
-    completedAt: Date,
+    approvedAt: {
+      type: Date,
+      default: null,
+    },
+    rejectedAt: {
+      type: Date,
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
 
-journalApprovalRequestSchema.index({ companyId: 1, journalId: 1, type: 1, status: 1 });
-
 export const getJournalApprovalRequestModel = async () => {
-  const db = await connectAccountingDB();
-  return db.models.JournalApprovalRequest || db.model("JournalApprovalRequest", journalApprovalRequestSchema);
+  const db = getDatabase("accounting");
+  return (
+    db.models.JournalApprovalRequest ||
+    db.model("JournalApprovalRequest", journalApprovalRequestSchema)
+  );
 };
