@@ -1,5 +1,12 @@
 import AppError from "../../../utils/AppError.js";
 import { getInvoiceModel } from "../models/Invoice.js";
+import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
+
+const ensureInvoicePopulateModels = async () => {
+  // Populate uses model names from the same DB connection, so register
+  // PurchaseOrder explicitly instead of relying on unrelated import order.
+  await getPurchaseOrderModel();
+};
 
 export const createInvoiceRepo = async (invoiceData) => {
   try {
@@ -20,16 +27,17 @@ export const createInvoiceRepo = async (invoiceData) => {
 
 export const getInvoiceByIdRepo = async (id) => {
   try {
+    await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
+    const PurchaseOrder = await getPurchaseOrderModel();
+    
     const invoice = await Invoice.findById(id)
-      .populate("linkedPO", "poNumber poDate vendor")
+      .populate({ path: "linkedPO", select: "poNumber poDate vendor", model: PurchaseOrder })
       .populate("salesJournalId")
       .populate("debtorAccountId")
       .populate("revenueAccountId")
       .populate("taxAccountId")
       .populate("paymentIds")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
       .lean();
 
     if (!invoice) {
@@ -44,12 +52,13 @@ export const getInvoiceByIdRepo = async (id) => {
 
 export const getInvoicesRepo = async (filter = {}, options = {}) => {
   try {
+    await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
+    const PurchaseOrder = await getPurchaseOrderModel();
     const { sort = { invoiceDate: -1 }, limit = 0, skip = 0 } = options;
 
     const invoices = await Invoice.find(filter)
-      .populate("linkedPO", "poNumber poDate")
-      .populate("createdBy", "name email")
+      .populate({ path: "linkedPO", select: "poNumber poDate", model: PurchaseOrder })
       .sort(sort)
       .limit(limit)
       .skip(skip)
@@ -78,9 +87,12 @@ export const getInvoiceByNumberRepo = async (invoiceNo, companyId) => {
 
 export const updateInvoiceRepo = async (id, updateData) => {
   try {
+    await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
+    const PurchaseOrder = await getPurchaseOrderModel();
+    
     const invoice = await Invoice.findByIdAndUpdate(id, updateData, { new: true })
-      .populate("linkedPO")
+      .populate({ path: "linkedPO", model: PurchaseOrder })
       .populate("salesJournalId")
       .populate("debtorAccountId")
       .populate("revenueAccountId")
@@ -130,11 +142,13 @@ export const getInvoicesByPORepo = async (purchaseOrderId) => {
 
 export const getInvoicesByStatusRepo = async (companyId, status, options = {}) => {
   try {
+    await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
+    const PurchaseOrder = await getPurchaseOrderModel();
     const { sort = { invoiceDate: -1 }, limit = 0, skip = 0 } = options;
 
     const invoices = await Invoice.find({ companyId, status })
-      .populate("linkedPO", "poNumber")
+      .populate({ path: "linkedPO", select: "poNumber", model: PurchaseOrder })
       .sort(sort)
       .limit(limit)
       .skip(skip)
@@ -172,7 +186,6 @@ export const getInvoicePendingApprovalRepo = async (companyId) => {
       companyId,
       approvalStatus: "Pending",
     })
-      .populate("createdBy", "name email")
       .sort({ invoiceDate: -1 })
       .lean();
 

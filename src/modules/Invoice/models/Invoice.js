@@ -214,11 +214,10 @@ invoiceSchema.index({ companyId: 1, invoiceDate: -1 });
 invoiceSchema.index({ linkedPO: 1, status: 1 });
 
 // Pre-save hook to calculate remainingAmount
-invoiceSchema.pre("save", function (next) {
+invoiceSchema.pre("save", function () {
   this.remainingAmount = Math.max(0, (this.invoiceAmount || 0) - (this.paidAmount || 0));
   this.isFullyPaid = this.remainingAmount === 0;
   this.updatedAt = new Date();
-  next();
 });
 
 export const getInvoiceModel = async () => {
