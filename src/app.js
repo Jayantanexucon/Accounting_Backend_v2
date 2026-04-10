@@ -13,6 +13,7 @@ import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
+import invoiceAccountingRoutes from "./modules/Invoice/routers/invoiceAccountingRoutes.js";
 import systemRoutes from "./routes/systemRoutes.js";
 import dotenv from "dotenv";
 
@@ -74,6 +75,8 @@ if (connectedModules.includes("accounting")) {
 if (connectedModules.includes("invoice")) {
   console.log("✅ Invoice module routes registered at /api/invoice");
   app.use("/api/invoices", invoiceRoutes);
+  console.log("✅ Invoice accounting routes registered at /api/invoice-accounting");
+  app.use("/api/invoice-accounting", invoiceAccountingRoutes);
 }
 
 // 404 Handler

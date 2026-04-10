@@ -1,11 +1,17 @@
 import AppError from "../../../utils/AppError.js";
 import { getInvoiceModel } from "../models/Invoice.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
+import { getPaymentModel } from "../../Account/models/Payment.js";
+import { getJournalModel } from "../../Account/models/Journal.js";
+import { getAccountModel } from "../../Account/models/Account.js";
 
 const ensureInvoicePopulateModels = async () => {
   // Populate uses model names from the same DB connection, so register
   // PurchaseOrder explicitly instead of relying on unrelated import order.
   await getPurchaseOrderModel();
+  await getPaymentModel();
+  await getJournalModel();
+  await getAccountModel();
 };
 
 export const createInvoiceRepo = async (invoiceData) => {
@@ -30,14 +36,17 @@ export const getInvoiceByIdRepo = async (id) => {
     await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
     const PurchaseOrder = await getPurchaseOrderModel();
-    
+    const Journal = await getJournalModel();
+    const Account = await getAccountModel();
+    const Payment = await getPaymentModel();
+
     const invoice = await Invoice.findById(id)
       .populate({ path: "linkedPO", select: "poNumber poDate vendor", model: PurchaseOrder })
-      .populate("salesJournalId")
-      .populate("debtorAccountId")
-      .populate("revenueAccountId")
-      .populate("taxAccountId")
-      .populate("paymentIds")
+      .populate({ path: "salesJournalId", model: Journal })
+      .populate({ path: "debtorAccountId", model: Account })
+      .populate({ path: "revenueAccountId", model: Account })
+      .populate({ path: "taxAccountId", model: Account })
+      .populate({ path: "paymentIds", model: Payment })
       .lean();
 
     if (!invoice) {
@@ -90,13 +99,15 @@ export const updateInvoiceRepo = async (id, updateData) => {
     await ensureInvoicePopulateModels();
     const Invoice = await getInvoiceModel();
     const PurchaseOrder = await getPurchaseOrderModel();
-    
+    const Journal = await getJournalModel();
+    const Account = await getAccountModel();
+
     const invoice = await Invoice.findByIdAndUpdate(id, updateData, { new: true })
       .populate({ path: "linkedPO", model: PurchaseOrder })
-      .populate("salesJournalId")
-      .populate("debtorAccountId")
-      .populate("revenueAccountId")
-      .populate("taxAccountId");
+      .populate({ path: "salesJournalId", model: Journal })
+      .populate({ path: "debtorAccountId", model: Account })
+      .populate({ path: "revenueAccountId", model: Account })
+      .populate({ path: "taxAccountId", model: Account });
 
     if (!invoice) {
       throw new AppError("Invoice not found", 404, "updateInvoiceRepo");
@@ -232,13 +243,16 @@ export const updateInvoicePaymentRepo = async (invoiceId, paidAmount, tdsAmount)
 
     invoice.paidAmount = (invoice.paidAmount || 0) + paidAmount;
     invoice.tdsAmount = (invoice.tdsAmount || 0) + tdsAmount;
-    invoice.remainingAmount = Math.max(0, invoice.invoiceAmount - invoice.paidAmount);
+    invoice.remainingAmount = Math.max(
+      0,
+      Number(invoice.invoiceAmount || 0) - Number(invoice.paidAmount || 0) - Number(invoice.tdsAmount || 0)
+    );
 
     // Update status
     if (invoice.remainingAmount === 0) {
       invoice.status = "PAID";
       invoice.isFullyPaid = true;
-    } else if (invoice.paidAmount > 0) {
+    } else if ((invoice.paidAmount || 0) > 0 || (invoice.tdsAmount || 0) > 0) {
       invoice.status = "PARTIALLY_PAID";
     }
 
