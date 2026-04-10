@@ -1,6 +1,7 @@
 import {
   createClientRepo,
   findClientRepo,
+  findClientsRepo,
   findClientByIdRepo,
   updateClientRepo,
   deleteClientRepo,
@@ -64,9 +65,8 @@ export const createClientController = async (req, res, next) => {
 
 export const getClientsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    const clients = await findClientRepo({ companyId }, false);
+    const companyId = req.query.companyId || req.params.companyId;
+    const clients = await findClientsRepo({ companyId }, true);
 
     return new ApiResponse({
       message: "Clients fetched successfully",
@@ -98,9 +98,8 @@ export const getClientByIdController = async (req, res, next) => {
 
 export const getPendingClientRequestsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    const clients = await findClientRepo({ companyId }, false);
+    const companyId = req.query.companyId || req.params.companyId;
+    const clients = await findClientsRepo({ companyId }, true);
 
     const pendingClients = clients?.ref?.filter((r) => r.status === "Pending") || [];
 
