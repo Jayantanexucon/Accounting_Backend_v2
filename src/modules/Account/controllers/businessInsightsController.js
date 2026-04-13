@@ -9,6 +9,49 @@ const toNumber = (value) => {
 
 const round2 = (value) => Number(toNumber(value).toFixed(2));
 
+const toDisplayCase = (value = "") =>
+  String(value)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+
+const inferLedgerType = (row = {}) => {
+  if (row.linkedPartyType === "client" || row.linkedClientId) return "client";
+  if (row.linkedPartyType === "vendor" || row.linkedVendorId) return "vendor";
+  if (row.groupNature === "Expense") return "expense";
+  if (row.groupNature === "Income") return "income";
+
+  const context = `${row.accountName || ""} ${row.groupName || ""}`.toLowerCase();
+  if (context.includes("cash") || context.includes("bank")) return "cashBank";
+
+  return "general";
+};
+
+const deriveActivityLabel = (row = {}) => {
+  const lineDescription = String(row.lineDescription || "").trim();
+  const narration = String(row.journalNarration || "").trim();
+  const reference = String(
+    row.externalDocNo || row.referenceNumber || row.journalNumber || row.sourceId || ""
+  ).trim();
+
+  if (lineDescription) return lineDescription;
+  if (narration) return narration;
+
+  if (row.sourceType === "PAYMENT") {
+    return reference ? `Payment against ${reference}` : "Payment entry";
+  }
+  if (row.sourceType === "INVOICE") {
+    return reference ? `Invoice ${reference}` : "Invoice posting";
+  }
+  if (row.voucherType) {
+    return `${toDisplayCase(row.voucherType)} entry`;
+  }
+
+  return "Ledger activity";
+};
+
 const getDefaultFinancialYearRange = () => {
   const now = new Date();
   const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
@@ -111,21 +154,77 @@ const buildInsightsFromRows = (rows = []) => {
     }
 
     if (!ledgerMap.has(ledgerKey)) {
+      const ledgerType = inferLedgerType(row);
       ledgerMap.set(ledgerKey, {
         ledgerId: row.accountId,
         ledger: row.accountName || "Unknown Ledger",
         ledgerCode: row.accountCode || "",
         group: row.groupName || "Unknown",
         groupNature,
+        ledgerType,
+        linkedPartyType: row.linkedPartyType || null,
+        linkedPartyId: row.linkedClientId || row.linkedVendorId || null,
+        partyName: row.partyName || row.accountName || "",
         debit: 0,
         credit: 0,
         closingBalance: 0,
+        transactionCount: 0,
+        invoiceCount: 0,
+        paymentCount: 0,
+        lastActivityDate: row.journalDate || null,
+        _breakdownMap: new Map(),
+        _transactionRows: [],
       });
     }
     const ledgerBucket = ledgerMap.get(ledgerKey);
     ledgerBucket.debit = round2(ledgerBucket.debit + debit);
     ledgerBucket.credit = round2(ledgerBucket.credit + credit);
     ledgerBucket.closingBalance = round2(ledgerBucket.debit - ledgerBucket.credit);
+    ledgerBucket.transactionCount += 1;
+    if (row.sourceType === "INVOICE") ledgerBucket.invoiceCount += 1;
+    if (row.sourceType === "PAYMENT") ledgerBucket.paymentCount += 1;
+    if (!ledgerBucket.lastActivityDate || new Date(row.journalDate) > new Date(ledgerBucket.lastActivityDate)) {
+      ledgerBucket.lastActivityDate = row.journalDate || ledgerBucket.lastActivityDate;
+    }
+
+    const activityLabel = deriveActivityLabel(row);
+    const breakdownKey = activityLabel.toLowerCase();
+    if (!ledgerBucket._breakdownMap.has(breakdownKey)) {
+      ledgerBucket._breakdownMap.set(breakdownKey, {
+        label: activityLabel,
+        debit: 0,
+        credit: 0,
+        count: 0,
+        sources: new Set(),
+      });
+    }
+    const breakdownBucket = ledgerBucket._breakdownMap.get(breakdownKey);
+    breakdownBucket.debit = round2(breakdownBucket.debit + debit);
+    breakdownBucket.credit = round2(breakdownBucket.credit + credit);
+    breakdownBucket.count += 1;
+    if (row.sourceType || row.voucherType) {
+      breakdownBucket.sources.add(row.sourceType || row.voucherType);
+    }
+
+    ledgerBucket._transactionRows.push({
+      transactionId: `${row.journalId || "journal"}:${row.lineNumber || ledgerBucket.transactionCount}`,
+      journalId: row.journalId || null,
+      journalDate: row.journalDate || null,
+      journalNumber: row.journalNumber || "",
+      voucherType: row.voucherType || "",
+      sourceType: row.sourceType || "MANUAL",
+      sourceId: row.sourceId || "",
+      referenceNumber: row.referenceNumber || "",
+      externalDocNo: row.externalDocNo || "",
+      partyName: row.partyName || "",
+      narration: row.journalNarration || "",
+      description: row.lineDescription || "",
+      label: activityLabel,
+      debit: round2(debit),
+      credit: round2(credit),
+      amount: round2(Math.max(debit, credit)),
+      direction: debit > 0 ? "debit" : credit > 0 ? "credit" : "neutral",
+    });
   });
 
   summary.totalIncome = round2(summary.totalIncome);
@@ -133,6 +232,45 @@ const buildInsightsFromRows = (rows = []) => {
   summary.netProfit = round2(summary.totalIncome - summary.totalExpense);
 
   const ledgerImpactSummary = Array.from(ledgerMap.values())
+    .map((item) => {
+      const breakdown = Array.from(item._breakdownMap.values())
+        .map((entry) => ({
+          label: entry.label,
+          debit: round2(entry.debit),
+          credit: round2(entry.credit),
+          count: entry.count,
+          sources: Array.from(entry.sources).sort(),
+        }))
+        .sort((a, b) => {
+          const aAmount = Math.max(a.debit, a.credit);
+          const bAmount = Math.max(b.debit, b.credit);
+          return bAmount - aAmount || a.label.localeCompare(b.label);
+        });
+
+      const transactions = item._transactionRows
+        .sort((a, b) => new Date(b.journalDate || 0) - new Date(a.journalDate || 0));
+
+      return {
+        ledgerId: item.ledgerId,
+        ledger: item.ledger,
+        ledgerCode: item.ledgerCode,
+        group: item.group,
+        groupNature: item.groupNature,
+        ledgerType: item.ledgerType,
+        linkedPartyType: item.linkedPartyType,
+        linkedPartyId: item.linkedPartyId,
+        partyName: item.partyName,
+        debit: round2(item.debit),
+        credit: round2(item.credit),
+        closingBalance: round2(item.closingBalance),
+        transactionCount: item.transactionCount,
+        invoiceCount: item.invoiceCount,
+        paymentCount: item.paymentCount,
+        lastActivityDate: item.lastActivityDate,
+        breakdown,
+        transactions,
+      };
+    })
     .sort((a, b) => a.ledger.localeCompare(b.ledger));
 
   summary.cashBankBalance = round2(
@@ -239,9 +377,23 @@ const getBusinessInsightsData = async ({ companyId, financialYear, fromDate, toD
         accountName: { $ifNull: ["$accountDoc.name", "$accountName"] },
         groupName: { $ifNull: ["$groupDoc.name", "$accountDoc.groupName"] },
         groupNature: { $ifNull: ["$groupDoc.nature", "Unknown"] },
+        linkedClientId: "$accountDoc.linkedClientId",
+        linkedVendorId: "$accountDoc.linkedVendorId",
+        linkedPartyType: "$accountDoc.linkedPartyType",
+        partyName: "$accountDoc.partyName",
         debitAmount: 1,
         creditAmount: 1,
+        journalId: "$journalDoc._id",
         journalDate: "$journalDoc.date",
+        journalNumber: "$journalDoc.number",
+        voucherType: "$journalDoc.voucherType",
+        sourceType: "$journalDoc.sourceType",
+        sourceId: "$journalDoc.sourceId",
+        referenceNumber: "$journalDoc.referenceNumber",
+        externalDocNo: "$journalDoc.externalDocNo",
+        journalNarration: "$journalDoc.narration",
+        lineDescription: "$description",
+        lineNumber: 1,
       },
     },
   ]);
