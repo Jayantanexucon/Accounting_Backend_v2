@@ -21,14 +21,12 @@ export const createPurchaseOrderRepo = async (poData) => {
 export const getPurchaseOrderByIdRepo = async (id) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findById(id)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .lean();
+    const po = await PurchaseOrder.findById(id).lean();
 
     if (!po) {
       throw new AppError("Purchase Order not found", 404, "getPurchaseOrderByIdRepo");
     }
+    if (po) po.client = po.vendor;
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;
@@ -42,14 +40,12 @@ export const getPurchaseOrdersRepo = async (filter = {}, options = {}) => {
     const { sort = { poDate: -1 }, limit = 0, skip = 0 } = options;
 
     const pos = await PurchaseOrder.find(filter)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
       .sort(sort)
       .limit(limit)
       .skip(skip)
       .lean();
 
-    return pos;
+    return pos.map(po => ({ ...po, client: po.vendor }));
   } catch (error) {
     throw new AppError(error.message || "Error retrieving POs", 500, "getPurchaseOrdersRepo");
   }
@@ -73,13 +69,12 @@ export const getPurchaseOrderByNumberRepo = async (poNumber, companyId) => {
 export const updatePurchaseOrderRepo = async (id, updateData) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findByIdAndUpdate(id, updateData, { new: true })
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email");
+    const po = await PurchaseOrder.findByIdAndUpdate(id, updateData, { new: true });
 
     if (!po) {
       throw new AppError("Purchase Order not found", 404, "updatePurchaseOrderRepo");
     }
+    if (po) po.client = po.vendor;
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;
@@ -112,13 +107,12 @@ export const getPOsByStatusRepo = async (companyId, status, options = {}) => {
     const { sort = { poDate: -1 }, limit = 0, skip = 0 } = options;
 
     const pos = await PurchaseOrder.find({ companyId, status })
-      .populate("createdBy", "name email")
       .sort(sort)
       .limit(limit)
       .skip(skip)
       .lean();
 
-    return pos;
+    return pos.map(po => ({ ...po, client: po.vendor }));
   } catch (error) {
     throw new AppError(error.message || "Error retrieving POs by status", 500, "getPOsByStatusRepo");
   }

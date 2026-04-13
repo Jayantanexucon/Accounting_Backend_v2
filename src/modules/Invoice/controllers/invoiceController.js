@@ -2,6 +2,7 @@ import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
 import { transactionManager } from "../../../utils/transactionManager.js";
+import path from "path";
 import {
   createInvoiceRepo,
   getInvoiceByIdRepo,
@@ -17,7 +18,7 @@ import {
   updateInvoicePaymentRepo,
   updateInvoiceAccountingStatusRepo,
 } from "../repos/invoiceRepo.js";
-import { createJournalRepo, updateJournalRepo } from "../../Account/repos/journalRepo.js";
+import { createJournalRepo } from "../../Account/repos/journalRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
 import { exportInvoice, exportInvoiceList } from "../services/invoiceExportService.js";
 import {
@@ -30,6 +31,40 @@ import {
 const generateInvoiceNumber = async (companyId) => {
   const timestamp = Date.now();
   return `INV-${companyId.toString().slice(-4)}-${timestamp}`;
+};
+
+const generateJournalNumber = (companyId) => {
+  const timestamp = Date.now();
+  return `JRN-${companyId.toString().slice(-4)}-${timestamp}`;
+};
+
+const ensureSalesJournalForInvoice = async (invoice, userId) => {
+  if (!invoice || invoice.salesJournalId) {
+    return invoice?.salesJournalId || null;
+  }
+
+  const journal = await createJournalRepo({
+    number: generateJournalNumber(invoice.companyId),
+    voucherType: "SALES",
+    date: invoice.invoiceDate || new Date(),
+    referenceNumber: invoice.invoiceNo,
+    externalDocNo: invoice.poNumber || invoice.linkedPO?.poNumber || "",
+    narration: `Sales posting for invoice ${invoice.invoiceNo}`,
+    companyId: String(invoice.companyId),
+    sourceType: "INVOICE",
+    sourceId: String(invoice._id),
+    partyName: invoice.billTo?.name || "",
+    totalDebit: Number(invoice.invoiceAmount || invoice.amountDue || 0),
+    totalCredit: Number(invoice.invoiceAmount || invoice.amountDue || 0),
+    status: "Approved",
+    approvalStatus: "Approved",
+    approvedBy: userId,
+    approvalDate: new Date(),
+    createdBy: userId,
+    updatedBy: userId,
+  });
+
+  return journal?._id || null;
 };
 
 export const createInvoice = async (req, res, next) => {
@@ -131,7 +166,7 @@ export const createInvoice = async (req, res, next) => {
 
 export const getAllInvoices = async (req, res, next) => {
   try {
-    const { companyId, status, startDate, endDate } = req.query;
+    const { companyId, status, approvalStatus, startDate, endDate, page, limit } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllInvoices");
@@ -144,7 +179,13 @@ export const getAllInvoices = async (req, res, next) => {
     } else {
       const filter = { companyId };
       if (status) filter.status = status;
-      invoices = await getInvoicesRepo(filter);
+      if (approvalStatus) filter.approvalStatus = approvalStatus;
+      const pageNo = Math.max(1, Number(page || 1));
+      const pageLimit = Math.max(0, Number(limit || 0));
+      invoices = await getInvoicesRepo(filter, {
+        limit: pageLimit,
+        skip: pageLimit > 0 ? (pageNo - 1) * pageLimit : 0,
+      });
     }
 
     new ApiResponse({
@@ -353,9 +394,13 @@ export const approveInvoice = async (req, res, next) => {
 
     const invoice = await getInvoiceByIdRepo(id);
 
+    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
+
     const updateData = {
       approvalStatus: "Approved",
       status: "POSTED",
+      salesJournalId: salesJournalId || invoice.salesJournalId || null,
+      accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
       approvedBy: req.user?.id,
       approvalDate: new Date(),
       approvalComments,
@@ -435,13 +480,16 @@ export const recordPayment = async (req, res, next) => {
     const { id } = req.params;
     const { paidAmount, tdsAmount, paymentDate, reference } = req.body;
 
-    if (!id || !paidAmount) {
-      throw new AppError("Invoice ID and paidAmount are required", 400, "recordPayment");
+    const normalizedPaidAmount = Number(paidAmount || 0);
+    const normalizedTdsAmount = Number(tdsAmount || 0);
+
+    if (!id || (normalizedPaidAmount <= 0 && normalizedTdsAmount <= 0)) {
+      throw new AppError("Invoice ID and payment amount or TDS amount are required", 400, "recordPayment");
     }
 
     const invoice = await getInvoiceByIdRepo(id);
 
-    const updatedInvoice = await updateInvoicePaymentRepo(id, paidAmount, tdsAmount || 0);
+    const updatedInvoice = await updateInvoicePaymentRepo(id, normalizedPaidAmount, normalizedTdsAmount);
 
     await createAuditLog({
       companyId: invoice.companyId,
@@ -453,7 +501,7 @@ export const recordPayment = async (req, res, next) => {
       userRole: req.user?.role,
       changes: {
         paidAmount,
-        tdsAmount,
+        tdsAmount: normalizedTdsAmount,
         paymentDate,
         reference,
       },
@@ -464,6 +512,37 @@ export const recordPayment = async (req, res, next) => {
       statusCode: 200,
       data: updatedInvoice,
       message: "Payment recorded successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const postSalesJournal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "postSalesJournal");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (invoice.approvalStatus !== "Approved") {
+      throw new AppError("Invoice must be approved before posting sales journal", 400, "postSalesJournal");
+    }
+
+    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
+    const updatedInvoice = await updateInvoiceRepo(id, {
+      salesJournalId,
+      accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
+      updatedBy: req.user?.id,
+    });
+
+    new ApiResponse({
+      statusCode: 200,
+      data: updatedInvoice,
+      message: "Sales journal posted successfully",
     }).send(res);
   } catch (error) {
     next(error);
@@ -498,6 +577,20 @@ export const exportInvoiceById = async (req, res, next) => {
       changes: { format },
       description: `Invoice ${invoice.invoiceNo} exported as ${format}`,
     });
+
+    if (format === "pdf" && result?.files?.pdfPath) {
+      return res.download(
+        path.resolve(result.files.pdfPath),
+        result.files.pdfFileName,
+      );
+    }
+
+    if (format === "word" && result?.files?.wordPath) {
+      return res.download(
+        path.resolve(result.files.wordPath),
+        result.files.wordFileName,
+      );
+    }
 
     new ApiResponse({
       statusCode: 200,

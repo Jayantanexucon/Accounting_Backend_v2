@@ -82,7 +82,7 @@ const purchaseOrderSchema = new mongoose.Schema(
     // PO Category
     poCategory: {
       type: String,
-      enum: ["general", "project", "staffing"],
+      enum: ["general", "project", "staffing", "retainer"],
       default: "general",
     },
 

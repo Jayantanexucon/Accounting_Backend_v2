@@ -32,13 +32,13 @@ export const createPurchaseOrder = async (req, res, next) => {
       notes,
     } = req.body;
 
-    if (!poDate || !deliveryDate || !vendor || !deliverTo || !items || items.length === 0 || !companyId) {
-      throw new AppError(
-        "Missing required fields: poDate, deliveryDate, vendor, deliverTo, items, companyId",
-        400,
-        "createPurchaseOrder"
-      );
-    }
+    // if (!poDate || !deliveryDate || !vendor || !deliverTo || !items || items.length === 0 || !companyId) {
+    //   throw new AppError(
+    //     "Missing required fields: poDate, deliveryDate, vendor, deliverTo, items, companyId",
+    //     400,
+    //     "createPurchaseOrder"
+    //   );
+    // }
 
     let totalTaxableValue = 0;
     let totalGSTAmount = 0;

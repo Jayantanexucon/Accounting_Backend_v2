@@ -54,21 +54,21 @@ router.get(
 
 // GET /api/client/:id - Get client by ID
 router.get(
-  "/:id",
+  "/:clientId",
   accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
   getClientByIdController
 );
 
 // PUT /api/client/:id - Update client
 router.put(
-  "/:id",
+  "/:clientId",
   accessControlMiddleware({ entityKey: "CLIENT", action: "EDIT" }),
   updateClientController
 );
 
 // DELETE /api/client/:id - Delete client
 router.delete(
-  "/:id",
+  "/:clientId",
   accessControlMiddleware({ entityKey: "CLIENT", action: "DELETE" }),
   deleteClientController
 );

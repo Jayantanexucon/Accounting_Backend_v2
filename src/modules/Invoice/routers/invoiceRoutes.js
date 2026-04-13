@@ -15,6 +15,7 @@ import {
   approveInvoice,
   rejectInvoice,
   recordPayment,
+  postSalesJournal,
   exportInvoiceById,
   exportInvoiceListEndpoint,
 } from "../controllers/invoiceController.js";
@@ -62,6 +63,9 @@ router.post("/:id/reject", accessControlMiddleware({ entityKey: "Invoice", actio
 
 // Record payment
 router.post("/:id/payment", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), recordPayment);
+
+// Post sales journal
+router.post("/:id/post-sales-journal", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), postSalesJournal);
 
 // Export single invoice
 router.get("/:id/export", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), exportInvoiceById);
