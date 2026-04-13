@@ -17,6 +17,13 @@ const generatePONumber = async (companyId) => {
   return `PO-${companyId.toString().slice(-4)}-${timestamp}`;
 };
 
+// Map the new paymentTerms value to the legacy billingModel field
+const billingModelMap = {
+  milestone: "milestone",
+  monthly: "fixed",
+  hourly: "hourly",
+};
+
 export const createPurchaseOrder = async (req, res, next) => {
   try {
     const {
@@ -24,31 +31,52 @@ export const createPurchaseOrder = async (req, res, next) => {
       deliveryDate,
       poCategory,
       billingModel,
+      direction,
       paymentTerms,
       vendor,
       deliverTo,
       items,
       companyId,
       notes,
+      milestones,
+      resources,
+      poreferencevalue,
+      paymentSchedule,
+      staffingConfig,
+      withSignature,
     } = req.body;
 
-    // if (!poDate || !deliveryDate || !vendor || !deliverTo || !items || items.length === 0 || !companyId) {
-    //   throw new AppError(
-    //     "Missing required fields: poDate, deliveryDate, vendor, deliverTo, items, companyId",
-    //     400,
-    //     "createPurchaseOrder"
-    //   );
-    // }
-
+    // ── Totals ────────────────────────────────────────────────────
     let totalTaxableValue = 0;
     let totalGSTAmount = 0;
     let totalAmount = 0;
 
-    items.forEach((item) => {
-      totalTaxableValue += item.taxableValue || 0;
-      totalGSTAmount += item.gstAmount || 0;
-      totalAmount += item.totalAmount || 0;
-    });
+    if (Array.isArray(items) && items.length > 0) {
+      items.forEach((item) => {
+        totalTaxableValue += Number(item.taxableValue) || 0;
+        totalGSTAmount += Number(item.gstAmount) || 0;
+        totalAmount += Number(item.totalAmount) || 0;
+      });
+    }
+
+    // For milestone POs the totals are set at contract level, not item level
+    if (paymentTerms === "milestone") {
+      totalTaxableValue = Number(req.body.totalTaxableValue) || totalTaxableValue;
+      totalGSTAmount = Number(req.body.totalGSTAmount) || totalGSTAmount;
+      totalAmount = Number(req.body.totalAmount) || totalAmount;
+    }
+
+    // ── Milestone defaults ────────────────────────────────────────
+    // Auto-assign milestoneNo and default status here in the controller
+    // so we never rely on a pre-save hook (unreliable with getDatabase()).
+    const normalizedMilestones = Array.isArray(milestones)
+      ? milestones.map((m, index) => ({
+        ...m,
+        milestoneNo: m.milestoneNo || index + 1,
+        status: m.status || "pending",
+        amount: Number(m.amount) || 0,
+      }))
+      : [];
 
     const poNumber = await generatePONumber(companyId);
 
@@ -57,19 +85,51 @@ export const createPurchaseOrder = async (req, res, next) => {
       poNumber,
       poDate: new Date(poDate),
       deliveryDate: new Date(deliveryDate),
-      poCategory: poCategory || "general",
-      billingModel: billingModel || "fixed",
-      paymentTerms: paymentTerms || "net-30",
+
+      // New fields
+      direction: direction || "receivable",
+      paymentTerms: paymentTerms || "monthly",
+
+      // Legacy fields — kept for backward compat
+      poCategory: poCategory || "project",
+      billingModel: billingModel || billingModelMap[paymentTerms] || "fixed",
+
       vendor,
       deliverTo,
-      items,
-      totalTaxableValue,
-      totalGSTAmount,
-      totalAmount,
-      valueInWords: `${totalAmount} only`,
+
+      // Items — hsnId comes as a String from frontend, stored as String
+      items: Array.isArray(items) ? items.map((item) => ({
+        ...item,
+        hsnId: item.hsnId ? String(item.hsnId) : undefined,
+        hsnSac: item.hsnSac || "",
+        gstRate: Number(item.gstRate) || 0,
+        gstAmount: Number(item.gstAmount) || 0,
+        taxableValue: Number(item.taxableValue) || 0,
+        totalAmount: Number(item.totalAmount) || 0,
+      })) : [],
+
+      milestones: normalizedMilestones,
+      resources: Array.isArray(resources) ? resources : [],
+      attendanceRecords: [],
+
+      totalTaxableValue: Math.round(totalTaxableValue * 100) / 100,
+      totalGSTAmount: Math.round(totalGSTAmount * 100) / 100,
+      totalCGSTAmount: Number(req.body.totalCGSTAmount) || Math.round((totalGSTAmount / 2) * 100) / 100,
+      totalSGSTAmount: Number(req.body.totalSGSTAmount) || Math.round((totalGSTAmount / 2) * 100) / 100,
+      totalIGSTAmount: Number(req.body.totalIGSTAmount) || 0,
+      totalAmount: Math.round(totalAmount * 100) / 100,
+      valueInWords: req.body.valueInWords || `${totalAmount} only`,
+
       notes,
-      createdBy: req.user?.id,
-      updatedBy: req.user?.id,
+      withSignature: withSignature || false,
+
+      ...(poreferencevalue && { poreferencevalue }),
+      ...(paymentSchedule && { paymentSchedule }),
+      ...(staffingConfig && { staffingConfig }),
+
+      // Store user id as String — User lives in a different DB
+      createdBy: req.user?.id ? String(req.user.id) : undefined,
+      updatedBy: req.user?.id ? String(req.user.id) : undefined,
     };
 
     const po = await createPurchaseOrderRepo(poData);
@@ -98,7 +158,7 @@ export const createPurchaseOrder = async (req, res, next) => {
 
 export const getAllPurchaseOrders = async (req, res, next) => {
   try {
-    const { companyId, status } = req.query;
+    const { companyId, status, direction, paymentTerms } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllPurchaseOrders");
@@ -106,6 +166,8 @@ export const getAllPurchaseOrders = async (req, res, next) => {
 
     const filter = { companyId };
     if (status) filter.status = status;
+    if (direction) filter.direction = direction;
+    if (paymentTerms) filter.paymentTerms = paymentTerms;
 
     const pos = await getPurchaseOrdersRepo(filter);
 
@@ -150,9 +212,31 @@ export const updatePurchaseOrder = async (req, res, next) => {
 
     const oldPO = await getPurchaseOrderByIdRepo(id);
 
+    // Keep billingModel in sync with paymentTerms
+    if (updateData.paymentTerms && !updateData.billingModel) {
+      updateData.billingModel = billingModelMap[updateData.paymentTerms] || "fixed";
+    }
+
+    // Normalize milestones if present
+    if (Array.isArray(updateData.milestones)) {
+      updateData.milestones = updateData.milestones.map((m, index) => ({
+        ...m,
+        milestoneNo: m.milestoneNo || index + 1,
+        status: m.status || "pending",
+      }));
+    }
+
+    // Normalize hsnId to String on items
+    if (Array.isArray(updateData.items)) {
+      updateData.items = updateData.items.map((item) => ({
+        ...item,
+        hsnId: item.hsnId ? String(item.hsnId) : undefined,
+      }));
+    }
+
     const updatedPO = await updatePurchaseOrderRepo(id, {
       ...updateData,
-      updatedBy: req.user?.id,
+      updatedBy: req.user?.id ? String(req.user.id) : undefined,
     });
 
     await createAuditLog({
