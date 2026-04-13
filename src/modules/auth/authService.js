@@ -13,7 +13,7 @@ export const createAccessToken = (user) => {
       tokenVersion: user.tokenVersion,
     },
     JWT_ACCESS_SECRET,
-    { expiresIn: "15m" }
+    { expiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN }
   );
 };
 
@@ -24,7 +24,7 @@ export const createRefreshTokenString = (user) => {
       tokenVersion: user.tokenVersion,
     },
     JWT_REFRESH_SECRET,
-    { expiresIn: "7d" }
+    { expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN }
   );
 };
 
