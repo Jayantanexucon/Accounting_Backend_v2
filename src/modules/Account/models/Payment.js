@@ -74,6 +74,10 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    isReconciled: {
+      type: Boolean,
+      default: false,
+    },
     updatedBy: {
       type: String,
     },
@@ -82,6 +86,42 @@ const paymentSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Auto-reconciliation hook
+paymentSchema.post("save", async function (doc, next) {
+  try {
+    // Only attempt reconciliation for Completed payments
+    if (doc.status === "COMPLETED") {
+      const { BankReconciliationService } = await import("../services/bankReconciliationService.js");
+      const { getJournalLineModel } = await import("./JournalLine.js");
+      
+      const JournalLine = await getJournalLineModel();
+      // Find the bank ledger from the associated journal
+      const lines = await JournalLine.find({ journalId: doc.journalId }).lean();
+      
+      for (const line of lines) {
+        const isBank = await BankReconciliationService.isBankLedger(line.accountId, doc.companyId);
+        if (isBank) {
+          await BankReconciliationService.autoReconcile({
+            id: doc._id,
+            companyId: doc.companyId,
+            amount: doc.amountPaid,
+            date: doc.paymentDate,
+            referenceNo: doc.reference,
+            narration: doc.notes,
+            bankLedgerId: line.accountId,
+            type: "PAYMENT",
+          });
+          // Break after finding the first bank ledger in the payment journal
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Auto-reconciliation hook failed for Payment:", error.message);
+  }
+  next();
+});
 
 paymentSchema.index({ companyId: 1, invoiceId: 1 });
 paymentSchema.index({ paymentDate: -1, status: 1 });
