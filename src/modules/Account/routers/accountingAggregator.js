@@ -16,5 +16,6 @@ router.use("/journal-excel", journalExcelRoutes);
 router.use("/payment", paymentRoutes);
 router.use("/account-types", accountTypeRoutes);
 router.use("/report", reportRoutes);
+router.use("/reports", reportRoutes);
 
 export default router;

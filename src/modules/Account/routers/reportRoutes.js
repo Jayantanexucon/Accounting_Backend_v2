@@ -11,6 +11,7 @@ import {
   getProfitAndLossHandler,
   getFinancialStatementsHandler,
 } from "../controllers/reportController.js";
+import { getBusinessInsightsHandler } from "../controllers/businessInsightsController.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -91,6 +92,13 @@ router.get(
   "/:companyId/financial-statements",
   accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getFinancialStatementsHandler
+);
+
+// Business insights / management summary
+router.get(
+  "/:companyId/business-insights",
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  getBusinessInsightsHandler
 );
 
 export default router;

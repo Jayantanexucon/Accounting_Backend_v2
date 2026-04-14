@@ -19,6 +19,11 @@ import {
   exportInvoiceById,
   exportInvoiceListEndpoint,
 } from "../controllers/invoiceController.js";
+import {
+  getPOTaxReport,
+  getClientTaxReport,
+  getTaxSummary,
+} from "../controllers/taxReportController.js";
 
 const router = express.Router();
 
@@ -36,6 +41,11 @@ router.get("/", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }
 
 // Get invoice statistics
 router.get("/stats/overview", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceStats);
+
+// Tax flow reports
+router.get("/reports/po-tax", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getPOTaxReport);
+router.get("/reports/client-tax", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getClientTaxReport);
+router.get("/reports/tax-summary", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getTaxSummary);
 
 // Get pending approvals
 router.get("/approvals/pending", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getPendingApprovals);
