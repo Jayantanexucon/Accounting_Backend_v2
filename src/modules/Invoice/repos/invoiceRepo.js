@@ -79,6 +79,16 @@ export const getInvoicesRepo = async (filter = {}, options = {}) => {
   }
 };
 
+export const countInvoicesRepo = async (filter = {}) => {
+  try {
+    const Invoice = await getInvoiceModel();
+    const count = await Invoice.countDocuments(filter);
+    return count;
+  } catch (error) {
+    throw new AppError(error.message || "Error counting invoices", 500, "countInvoicesRepo");
+  }
+};
+
 export const getInvoiceByNumberRepo = async (invoiceNo, companyId) => {
   try {
     const Invoice = await getInvoiceModel();
