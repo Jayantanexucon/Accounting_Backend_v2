@@ -27,6 +27,12 @@ const bankReconciliationAllocationSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    bankLedgerTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "BankLedgerTransaction",
+      default: null,
+      index: true,
+    },
     allocatedAmount: {
       type: Number,
       required: [true, "Allocated amount is required"],
@@ -76,11 +82,15 @@ bankReconciliationAllocationSchema.index(
   { sparse: true }
 );
 
+bankReconciliationAllocationSchema.index(
+  { companyId: 1, bankTransactionId: 1, bankLedgerTransactionId: 1 },
+  { sparse: true }
+);
+
 // Sync matchScore and score
-bankReconciliationAllocationSchema.pre("save", function (next) {
+bankReconciliationAllocationSchema.pre("save", function () {
   if (this.matchScore && !this.score) this.score = this.matchScore;
   if (this.score && !this.matchScore) this.matchScore = this.score;
-  next();
 });
 
 export const getBankReconciliationAllocationModel = async () => {

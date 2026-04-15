@@ -112,12 +112,11 @@ const bankTransactionSchema = new mongoose.Schema(
 );
 
 // Middleware to sync date/transactionDate and reference/referenceNo
-bankTransactionSchema.pre("save", function (next) {
+bankTransactionSchema.pre("save", function () {
   if (this.date && !this.transactionDate) this.transactionDate = this.date;
   if (this.transactionDate && !this.date) this.date = this.transactionDate;
   if (this.referenceNo && !this.reference) this.reference = this.referenceNo;
   if (this.reference && !this.referenceNo) this.referenceNo = this.reference;
-  next();
 });
 
 bankTransactionSchema.index({ companyId: 1, reconciliationStatus: 1, date: -1 });

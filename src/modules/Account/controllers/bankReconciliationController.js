@@ -7,7 +7,20 @@ import { getBankReconciliationAllocationModel } from "../models/BankReconciliati
 import { getPaymentModel } from "../models/Payment.js";
 import { getInvoiceModel } from "../../Invoice/models/Invoice.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
+import { getJournalModel } from "../models/Journal.js";
+import { getBankLedgerTransactionModel } from "../models/BankLedgerTransaction.js";
+import { getAccountModel } from "../models/Account.js";
 import { BankReconciliationService } from "../services/bankReconciliationService.js";
+import { recordPaymentForInvoice } from "../../Invoice/controllers/invoiceAccountingController.js";
+
+const handleControllerError = (error, res) => {
+  const statusCode = error?.statusCode || 500;
+  return res.status(statusCode).json({
+    status: error?.status || "error",
+    message: error?.message || "Internal Server Error",
+    origin: error?.origin || error?.name || "Error",
+  });
+};
 
 /**
  * Normalizes output for frontend compatibility
@@ -16,38 +29,54 @@ const enrichBankTransaction = (tx, allocationsByBank) => ({
   ...tx,
   transactionDate: tx.date || tx.transactionDate, // Ensure compatibility
   reference: tx.referenceNo || tx.reference,
+  availableAmount: Math.max(0, Math.abs(Number(tx.amount || 0)) - Math.abs(Number(tx.allocatedAmount || 0))),
   reconciliationAllocations: (allocationsByBank.get(String(tx._id)) || []).map(a => ({
     ...a,
     bankTransactionId: String(a.bankTransactionId),
-    paymentId: String(a.paymentId),
+    paymentId: a.paymentId ? String(a.paymentId) : null,
+    bankLedgerTransactionId: a.bankLedgerTransactionId ? String(a.bankLedgerTransactionId) : null,
   })),
 });
 
-const enrichBookEntry = (line, paymentMap, allocationsByJournal, invoiceMap) => {
-  const journal = line.journalId;
+const enrichBookEntry = (ledgerTx, paymentMap, allocationsByLedger, invoiceMap, journalLinesByJournalId) => {
+  const journal = ledgerTx.journalId;
   const payment = paymentMap.get(String(journal?._id));
-  
-  const allocations = (allocationsByJournal.get(String(journal?._id)) || []).map(a => ({
+  const allocations = (allocationsByLedger.get(String(ledgerTx._id)) || []).map(a => ({
     ...a,
     bankTransactionId: String(a.bankTransactionId),
-    journalId: String(a.journalId),
+    journalId: a.journalId ? String(a.journalId) : null,
+    bankLedgerTransactionId: a.bankLedgerTransactionId ? String(a.bankLedgerTransactionId) : null,
+  }));
+  const totalAmount = Math.abs(Number(ledgerTx.amount || 0));
+  const allocatedAmount = Math.abs(Number(ledgerTx.allocatedAmount || 0));
+  const unreconciledAmount = Math.max(0, totalAmount - allocatedAmount);
+  const journalLines = (journalLinesByJournalId.get(String(journal?._id)) || []).map((line) => ({
+    ...line,
+    isBankLedgerLine: String(line._id) === String(ledgerTx.journalLineId),
   }));
 
-  const amount = line.debitAmount > 0 ? line.debitAmount : -line.creditAmount;
-
   return {
-    _id: line._id,
+    _id: String(ledgerTx._id),
+    journalLineId: ledgerTx.journalLineId,
     journalId: journal?._id,
     paymentId: payment?._id,
-    date: journal?.date,
-    amount,
+    date: ledgerTx.date || journal?.date,
+    amount: unreconciledAmount,
+    totalAmount,
+    allocatedAmount,
+    unreconciledAmount,
+    transactionType: ledgerTx.transactionType,
+    journalNumber: journal?.number || "",
+    voucherType: journal?.voucherType || "",
     reference: payment?.reference || journal?.referenceNumber || journal?.externalDocNo || "",
-    description: line.description || journal?.narration || "",
-    reconciliationStatus: line.isReconciled ? "MATCHED" : "UNMATCHED",
+    description: ledgerTx.narration || journal?.narration || "",
+    reconciliationStatus: ledgerTx.reconciliationStatus || "UNMATCHED",
+    isReconciled: Boolean(ledgerTx.isReconciled),
     paymentDetails: payment ? {
       ...payment,
       invoice: invoiceMap.get(String(payment.invoiceId))
     } : null,
+    journalLines,
     reconciliationAllocations: allocations,
     matchedBankTransactionIds: allocations.map(a => String(a.bankTransactionId)),
   };
@@ -79,7 +108,11 @@ export const getReconciliationOverview = async (req, res, next) => {
     const Payment = await getPaymentModel();
     const Allocation = await getBankReconciliationAllocationModel();
     const Invoice = await getInvoiceModel();
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
     const JournalLine = await getJournalLineModel();
+    await getJournalModel();
+    await getAccountModel();
+    await BankReconciliationService.ensureBankLedgerTransactionsForAccount(companyId, bankLedgerId);
 
     const bankFilter = { companyId, bankLedgerId };
     if (status !== "ALL") bankFilter.reconciliationStatus = status;
@@ -91,25 +124,34 @@ export const getReconciliationOverview = async (req, res, next) => {
       ];
     }
 
-    const [bankTransactions, journalLines, payments, allocations] = await Promise.all([
+    const [bankTransactions, bankLedgerTransactions, payments, allocations, openInvoices] = await Promise.all([
       BankTransaction.find(bankFilter).sort({ date: -1 }).lean(),
-      JournalLine.find({ companyId, accountId: bankLedgerId }).populate("journalId").sort({ "journalId.date": -1 }).lean(),
+      BankLedgerTransaction.find({
+        companyId,
+        bankLedgerId,
+        ...(status !== "ALL" ? { reconciliationStatus: status } : {}),
+      })
+        .populate("journalId")
+        .sort({ date: -1, createdAt: -1 })
+        .lean(),
       Payment.find({ companyId }).populate("journalId").lean(),
       Allocation.find({ companyId }).lean(),
+      Invoice.find({ companyId, remainingAmount: { $gt: 0 } })
+        .sort({ invoiceDate: -1 })
+        .limit(100)
+        .lean(),
     ]);
 
     const allocationsByBank = new Map();
-    const allocationsByJournal = new Map();
+    const allocationsByLedger = new Map();
     allocations.forEach(a => {
       if (a.bankTransactionId) {
         if (!allocationsByBank.has(String(a.bankTransactionId))) allocationsByBank.set(String(a.bankTransactionId), []);
         allocationsByBank.get(String(a.bankTransactionId)).push(a);
       }
-      if (a.journalId) {
-        if (a.journalId) {
-          if (!allocationsByJournal.has(String(a.journalId))) allocationsByJournal.set(String(a.journalId), []);
-          allocationsByJournal.get(String(a.journalId)).push(a);
-        }
+      if (a.bankLedgerTransactionId) {
+        if (!allocationsByLedger.has(String(a.bankLedgerTransactionId))) allocationsByLedger.set(String(a.bankLedgerTransactionId), []);
+        allocationsByLedger.get(String(a.bankLedgerTransactionId)).push(a);
       }
     });
 
@@ -118,13 +160,59 @@ export const getReconciliationOverview = async (req, res, next) => {
       if (p.journalId?._id) paymentMap.set(String(p.journalId._id), p);
     });
 
+    const journalIds = [
+      ...new Set(
+        bankLedgerTransactions
+          .map((entry) => entry.journalId?._id)
+          .filter(Boolean)
+          .map((id) => String(id))
+      ),
+    ];
+    const journalLines = journalIds.length
+      ? await JournalLine.find({ journalId: { $in: journalIds } })
+          .populate({ path: "accountId", select: "name code" })
+          .sort({ lineNumber: 1, createdAt: 1 })
+          .lean()
+      : [];
+    const journalLinesByJournalId = new Map();
+    journalLines.forEach((line) => {
+      const journalId = String(line.journalId);
+      if (!journalLinesByJournalId.has(journalId)) journalLinesByJournalId.set(journalId, []);
+      const populatedAccount = line.accountId && typeof line.accountId === "object" ? line.accountId : null;
+      journalLinesByJournalId.get(journalId).push({
+        _id: String(line._id),
+        journalId,
+        lineNumber: line.lineNumber,
+        description: line.description || "",
+        accountId: populatedAccount?._id ? String(populatedAccount._id) : String(line.accountId || ""),
+        accountName: line.accountName || populatedAccount?.name || "Unknown Account",
+        accountCode: line.accountCode || populatedAccount?.code || "",
+        debitAmount: Number(line.debitAmount || 0),
+        creditAmount: Number(line.creditAmount || 0),
+      });
+    });
+
     const invoiceIds = [...new Set(payments.map(p => String(p.invoiceId)).filter(id => id !== "undefined"))];
     const invoices = await Invoice.find({ _id: { $in: invoiceIds } }).lean();
     const invoiceMap = new Map(invoices.map(i => [String(i._id), i]));
 
     const brs = await BankReconciliationService.getBRSReport(companyId, bankLedgerId);
 
-    const bookEntries = journalLines.map(line => enrichBookEntry(line, paymentMap, allocationsByJournal, invoiceMap));
+    const filteredBookLedgerTransactions = search
+      ? bankLedgerTransactions.filter((entry) => {
+          const reference = paymentMap.get(String(entry.journalId?._id))?.reference
+            || entry.journalId?.referenceNumber
+            || entry.journalId?.externalDocNo
+            || "";
+          const description = entry.narration || entry.journalId?.narration || "";
+          const q = search.toLowerCase();
+          return reference.toLowerCase().includes(q) || description.toLowerCase().includes(q);
+        })
+      : bankLedgerTransactions;
+
+    const bookEntries = filteredBookLedgerTransactions.map((entry) =>
+      enrichBookEntry(entry, paymentMap, allocationsByLedger, invoiceMap, journalLinesByJournalId)
+    );
 
     new ApiResponse({
       statusCode: 200,
@@ -136,19 +224,19 @@ export const getReconciliationOverview = async (req, res, next) => {
         bankSummary: {
           total: bankTransactions.length,
           matched: bankTransactions.filter(tx => tx.reconciliationStatus === "MATCHED").length,
-          unmatched: bankTransactions.filter(tx => tx.reconciliationStatus === "UNMATCHED").length,
+          unmatched: bankTransactions.filter(tx => tx.reconciliationStatus !== "MATCHED").length,
         },
         paymentSummary: {
           total: bookEntries.length,
           matched: bookEntries.filter(p => p.reconciliationStatus === "MATCHED").length,
-          unmatched: bookEntries.filter(p => p.reconciliationStatus === "UNMATCHED").length,
+          unmatched: bookEntries.filter(p => p.reconciliationStatus !== "MATCHED").length,
         }
       },
       message: "Overview retrieved",
     }).send(res);
 
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
@@ -160,17 +248,28 @@ export const importBankTransactions = async (req, res, next) => {
     const docs = transactions.map(t => ({
       companyId,
       date: new Date(t.transactionDate || t.date),
+      transactionDate: new Date(t.transactionDate || t.date),
       amount: Math.abs(t.amount || 0),
       type: (t.type || "CREDIT").toUpperCase(),
-      referenceNo: t.reference || t.UTR || "",
+      referenceNo: String(t.reference || t.UTR || "").trim().toUpperCase(),
+      normalizedReference: String(t.reference || t.UTR || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
+      reference: String(t.reference || t.UTR || "").trim().toUpperCase(),
       description: t.description || "",
       bankLedgerId: t.bankLedgerId, // Frontend should provide this
+      balance: t.balance ?? null,
+      valueDate: t.valueDate ? new Date(t.valueDate) : null,
+      fileName: t.fileName || "",
       reconciliationStatus: "UNMATCHED",
       isReconciled: false,
       createdBy: req.user?.id,
+      updatedBy: req.user?.id,
     }));
 
     const inserted = await BankTransaction.insertMany(docs);
+    const bankLedgerIds = [...new Set(inserted.map(item => String(item.bankLedgerId)).filter(Boolean))];
+    for (const ledgerId of bankLedgerIds) {
+      await BankReconciliationService.autoReconcileBankLedger(companyId, ledgerId);
+    }
 
     new ApiResponse({
       statusCode: 201,
@@ -178,7 +277,7 @@ export const importBankTransactions = async (req, res, next) => {
       message: "Imported successfully",
     }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
@@ -186,55 +285,80 @@ export const autoReconcileBankTransactions = async (req, res, next) => {
   try {
     const { companyId } = req.params;
     const { bankLedgerId } = req.query;
-    
-    // The autoReconcile process is now triggered by hooks, but for a batch process
-    // we can implement a logic here to scan all unmatched entries for this ledger.
-    
-    // For now, we'll return a success message as the background hooks handle new entries
-    // and manual "Auto Reconcile" can be a batch scan.
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
+
+    const targetLedgerIds = bankLedgerId
+      ? [bankLedgerId]
+      : [
+          ...new Set(
+            (
+              await BankLedgerTransaction.find({ companyId }, { bankLedgerId: 1 }).lean()
+            ).map((item) => String(item.bankLedgerId)).filter(Boolean)
+          ),
+        ];
+
+    const exactMatches = [];
+    for (const ledgerId of targetLedgerIds) {
+      const allocations = await BankReconciliationService.autoReconcileBankLedger(companyId, ledgerId);
+      exactMatches.push(...allocations.map((item) => ({
+        bankTransactionId: item.bankTransactionId,
+        bankLedgerTransactionId: item.bankLedgerTransactionId,
+        allocatedAmount: item.allocatedAmount,
+      })));
+    }
     
     new ApiResponse({
       statusCode: 200,
-      data: { exactMatches: [], potentialMatches: [] },
+      data: { exactMatches, potentialMatches: [] },
       message: bankLedgerId 
         ? "Auto reconciliation completed for selected account" 
         : "Auto reconciliation completed for all accounts",
     }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
-export const manualReconcileBankTransaction = async (req, res, next) => {
+export const manualReconcileBankTransaction = async (req, res) => {
   try {
     const { companyId, bankTransactionId, matches = [], note = "" } = req.body;
     const Allocation = await getBankReconciliationAllocationModel();
     const BankTransaction = await getBankTransactionModel();
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
     const Payment = await getPaymentModel();
 
     for (const m of matches) {
+      const bankLedgerTransactionId = m.paymentId;
+      const ledgerTx = await BankLedgerTransaction.findById(bankLedgerTransactionId).lean();
+      if (!ledgerTx) continue;
+
+      const payment = await Payment.findOne({ journalId: ledgerTx.journalId }).lean();
+
       await Allocation.create({
         companyId,
         bankTransactionId,
-        paymentId: m.paymentId,
+        journalId: ledgerTx.journalId,
+        paymentId: payment?._id,
+        bankLedgerTransactionId,
         allocatedAmount: m.allocatedAmount,
         matchType: "MANUAL",
         note,
         matchedBy: req.user?.id,
       });
+      await BankReconciliationService.syncAllocationStatus(bankTransactionId, bankLedgerTransactionId);
+      
+      // Update associated Payment status if it exists
+      if (payment) {
+        const linkedLedgerTransactions = await BankLedgerTransaction.find({ companyId, journalId: ledgerTx.journalId }).lean();
+        const isFullyReconciled = linkedLedgerTransactions.length > 0
+          && linkedLedgerTransactions.every((item) => item.reconciliationStatus === "MATCHED");
 
-      // Update payment status
-      await Payment.findByIdAndUpdate(m.paymentId, {
-        reconciliationStatus: "FULLY_RECONCILED",
-        isReconciled: true,
-      });
+        await Payment.findByIdAndUpdate(payment._id, {
+          reconciliationStatus: isFullyReconciled ? "FULLY_RECONCILED" : "PARTIALLY_RECONCILED",
+          isReconciled: isFullyReconciled,
+        });
+      }
     }
-
-    // Update bank transaction status
-    await BankTransaction.findByIdAndUpdate(bankTransactionId, {
-      reconciliationStatus: "MATCHED",
-      isReconciled: true,
-    });
 
     new ApiResponse({
       statusCode: 200,
@@ -242,7 +366,7 @@ export const manualReconcileBankTransaction = async (req, res, next) => {
       message: "Manually matched",
     }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
@@ -250,55 +374,144 @@ export const unlinkReconciliation = async (req, res, next) => {
   try {
     const { companyId, paymentId, bankTransactionId } = req.body;
     const Allocation = await getBankReconciliationAllocationModel();
-    const BankTransaction = await getBankTransactionModel();
     const Payment = await getPaymentModel();
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
 
-    await Allocation.deleteOne({ companyId, paymentId, bankTransactionId });
+    const ledgerTx = await BankLedgerTransaction.findById(paymentId).lean();
+    if (!ledgerTx) throw new AppError("Book entry not found", 404);
 
-    // Reset statuses
-    await BankTransaction.findByIdAndUpdate(bankTransactionId, {
-      reconciliationStatus: "UNMATCHED",
-      isReconciled: false,
+    await Allocation.deleteOne({ 
+      companyId, 
+      bankTransactionId,
+      bankLedgerTransactionId: ledgerTx._id,
     });
-    await Payment.findByIdAndUpdate(paymentId, {
-      reconciliationStatus: "NOT_RECONCILED",
-      isReconciled: false,
-    });
+    await BankReconciliationService.syncAllocationStatus(bankTransactionId, ledgerTx._id);
+
+    const payment = await Payment.findOne({ journalId: ledgerTx.journalId }).lean();
+    if (payment) {
+      const relatedLedgerTransactions = await BankLedgerTransaction.find({ companyId, journalId: ledgerTx.journalId }).lean();
+      const isFullyReconciled = relatedLedgerTransactions.length > 0
+        && relatedLedgerTransactions.every((item) => item.reconciliationStatus === "MATCHED");
+      const isPartiallyReconciled = relatedLedgerTransactions.some((item) => item.reconciliationStatus !== "UNMATCHED");
+
+      await Payment.findByIdAndUpdate(payment._id, {
+        reconciliationStatus: isFullyReconciled
+          ? "FULLY_RECONCILED"
+          : isPartiallyReconciled
+            ? "PARTIALLY_RECONCILED"
+            : "NOT_RECONCILED",
+        isReconciled: isFullyReconciled,
+      });
+    }
 
     new ApiResponse({
       statusCode: 200,
       message: "Unlinked successfully",
     }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
 export const createPaymentFromBankTransaction = async (req, res, next) => {
-  // Logic to create a payment and link it immediately
-  // Similar to existing implementation but cleaned up
   try {
-    const { companyId, bankTransactionId, invoiceId, paymentData } = req.body;
+    const { companyId, bankTransactionId, invoiceId, bankLedgerId, paymentData } = req.body;
     const Payment = await getPaymentModel();
-    
-    const payment = await Payment.create({
-      ...paymentData,
+    const Allocation = await getBankReconciliationAllocationModel();
+    const BankTransaction = await getBankTransactionModel();
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
+
+    if (!companyId || !bankTransactionId || !invoiceId || !bankLedgerId) {
+      throw new AppError("companyId, bankTransactionId, invoiceId and bankLedgerId are required", 400);
+    }
+
+    const bankTransaction = await BankTransaction.findOne({
+      _id: bankTransactionId,
       companyId,
+      bankLedgerId,
+    }).lean();
+    if (!bankTransaction) {
+      throw new AppError("Selected bank transaction not found for the chosen bank ledger", 404);
+    }
+
+    const result = await recordPaymentForInvoice({
       invoiceId,
-      status: "COMPLETED",
-      createdBy: req.user?.id,
+      companyId,
+      bankLedgerId,
+      clientId: paymentData?.clientId || null,
+      amountPaid: Number(paymentData?.amountPaid || 0),
+      tdsAmount: Number(paymentData?.tdsAmount || 0),
+      tdsRate: Number(paymentData?.tdsRate || 0),
+      tdsSection: paymentData?.tdsSection || "",
+      paymentMode: paymentData?.paymentMode || "BANK_TRANSFER",
+      paymentDate: paymentData?.paymentDate || bankTransaction.transactionDate || bankTransaction.date,
+      reference: paymentData?.reference || bankTransaction.reference || bankTransaction.referenceNo || "",
+      notes: paymentData?.notes || bankTransaction.description || "",
+      userId: req.user?.id || req.user?._id?.toString(),
+      reqUser: req.user || {},
     });
 
-    // The hook on Payment will trigger autoReconcile if it matches.
-    // Or we can manually link it here.
+    await BankReconciliationService.ensureBankLedgerTransactionsForAccount(companyId, bankLedgerId);
+
+    const createdLedgerTransactions = await BankLedgerTransaction.find({
+      companyId,
+      bankLedgerId,
+      journalId: result.journal?._id,
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const existingBankAllocations = await Allocation.find({ bankTransactionId }).lean();
+    const alreadyAllocatedToBank = existingBankAllocations.reduce(
+      (sum, item) => sum + Number(item.allocatedAmount || 0),
+      0
+    );
+    let remainingBankAmount = Math.max(0, Number(bankTransaction.amount || 0) - alreadyAllocatedToBank);
+
+    for (const ledgerTx of createdLedgerTransactions) {
+      if (remainingBankAmount <= 0) break;
+
+      const existingLedgerAllocations = await Allocation.find({
+        bankLedgerTransactionId: ledgerTx._id,
+      }).lean();
+      const alreadyAllocatedToLedger = existingLedgerAllocations.reduce(
+        (sum, item) => sum + Number(item.allocatedAmount || 0),
+        0
+      );
+      const remainingLedgerAmount = Math.max(0, Number(ledgerTx.amount || 0) - alreadyAllocatedToLedger);
+      const allocationAmount = Math.min(remainingBankAmount, remainingLedgerAmount);
+
+      if (allocationAmount <= 0) continue;
+
+      await Allocation.create({
+        companyId,
+        bankTransactionId,
+        journalId: ledgerTx.journalId,
+        paymentId: result.payment?._id || null,
+        bankLedgerTransactionId: ledgerTx._id,
+        allocatedAmount: allocationAmount,
+        matchType: "MANUAL",
+        note: "Created from bank reconciliation missing payment flow",
+        matchedBy: req.user?.id,
+      });
+
+      await BankReconciliationService.syncAllocationStatus(bankTransactionId, ledgerTx._id);
+      remainingBankAmount -= allocationAmount;
+    }
+
+    const payment = await Payment.findById(result.payment?._id).populate("journalId").lean();
 
     new ApiResponse({
       statusCode: 201,
-      data: payment,
+      data: {
+        payment,
+        journal: result.journal,
+        invoice: result.invoice,
+      },
       message: "Payment created and linked",
     }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };
 
@@ -310,6 +523,6 @@ export const getBankReconciliationStatement = async (req, res, next) => {
     const brs = await BankReconciliationService.getBRSReport(companyId, bankLedgerId);
     new ApiResponse({ statusCode: 200, data: brs }).send(res);
   } catch (error) {
-    next(error);
+    return handleControllerError(error, res);
   }
 };

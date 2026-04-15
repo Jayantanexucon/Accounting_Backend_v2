@@ -78,36 +78,20 @@ const journalSchema = new mongoose.Schema(
 );
 
 // Auto-reconciliation hook
-journalSchema.post("save", async function (doc, next) {
+journalSchema.post("save", async function (doc) {
   try {
-    // Only attempt reconciliation for Posted journals
-    if (doc.status === "Posted") {
+    if (["Posted", "Approved"].includes(doc.status)) {
       const { BankReconciliationService } = await import("../services/bankReconciliationService.js");
       const { getJournalLineModel } = await import("./JournalLine.js");
-      
       const JournalLine = await getJournalLineModel();
       const lines = await JournalLine.find({ journalId: doc._id }).lean();
-      
-      for (const line of lines) {
-        const isBank = await BankReconciliationService.isBankLedger(line.accountId, doc.companyId);
-        if (isBank) {
-          await BankReconciliationService.autoReconcile({
-            id: doc._id,
-            companyId: doc.companyId,
-            amount: line.debitAmount || line.creditAmount,
-            date: doc.date,
-            referenceNo: doc.referenceNumber,
-            narration: doc.narration,
-            bankLedgerId: line.accountId,
-            type: "JOURNAL",
-          });
-        }
+      if (lines.length > 0) {
+        await BankReconciliationService.processJournalForReconciliation(doc, lines, doc.companyId);
       }
     }
   } catch (error) {
     console.error("Auto-reconciliation hook failed for Journal:", error.message);
   }
-  next();
 });
 
 journalSchema.index({ companyId: 1, date: -1 });

@@ -88,39 +88,26 @@ const paymentSchema = new mongoose.Schema(
 );
 
 // Auto-reconciliation hook
-paymentSchema.post("save", async function (doc, next) {
+paymentSchema.post("save", async function (doc) {
   try {
-    // Only attempt reconciliation for Completed payments
-    if (doc.status === "COMPLETED") {
+    if (doc.status === "COMPLETED" && doc.journalId) {
       const { BankReconciliationService } = await import("../services/bankReconciliationService.js");
-      const { getJournalLineModel } = await import("./JournalLine.js");
-      
-      const JournalLine = await getJournalLineModel();
-      // Find the bank ledger from the associated journal
-      const lines = await JournalLine.find({ journalId: doc.journalId }).lean();
-      
-      for (const line of lines) {
-        const isBank = await BankReconciliationService.isBankLedger(line.accountId, doc.companyId);
-        if (isBank) {
-          await BankReconciliationService.autoReconcile({
-            id: doc._id,
-            companyId: doc.companyId,
-            amount: doc.amountPaid,
-            date: doc.paymentDate,
-            referenceNo: doc.reference,
-            narration: doc.notes,
-            bankLedgerId: line.accountId,
-            type: "PAYMENT",
-          });
-          // Break after finding the first bank ledger in the payment journal
-          break;
-        }
+      const { getBankLedgerTransactionModel } = await import("./BankLedgerTransaction.js");
+      const BankLedgerTransaction = await getBankLedgerTransactionModel();
+
+      const ledgerTransactions = await BankLedgerTransaction.find({
+        companyId: doc.companyId,
+        journalId: doc.journalId,
+        reconciliationStatus: { $ne: "MATCHED" },
+      }).lean();
+
+      for (const ledgerTx of ledgerTransactions) {
+        await BankReconciliationService.autoReconcile(ledgerTx._id);
       }
     }
   } catch (error) {
     console.error("Auto-reconciliation hook failed for Payment:", error.message);
   }
-  next();
 });
 
 paymentSchema.index({ companyId: 1, invoiceId: 1 });
