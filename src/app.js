@@ -14,6 +14,7 @@ import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
 import invoiceAccountingRoutes from "./modules/Invoice/routers/invoiceAccountingRoutes.js";
+import auditRoutes from "./modules/audit/routes.js";
 import systemRoutes from "./routes/systemRoutes.js";
 import dotenv from "dotenv";
 
@@ -60,6 +61,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
+app.use("/api/audit-logs", auditRoutes);
 
 // Conditionally register module-specific routes
 const connectedModules = await getConnectedModules();
