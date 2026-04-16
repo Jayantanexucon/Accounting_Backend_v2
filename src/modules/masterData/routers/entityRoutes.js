@@ -16,52 +16,47 @@ const router = express.Router();
 // All routes require authentication
 router.use(protect);
 
-// POST /api/masterData/entity - Create entity
+// POST /api/masterData/entity - Create entity (Admin only - no entity-level access control)
 router.post(
   "/",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "CREATE" }),
   createEntityController
 );
 
-// GET /api/masterData/entity/tree - Get hierarchical tree
+// GET /api/masterData/entity/tree - Get hierarchical tree (No entity-level access control - needed by navbar)
 router.get(
   "/tree",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "VIEW" }),
   buildTreeController
 );
 
-// GET /api/masterData/entity - Get all entities
+// GET /api/masterData/entity - Get all entities (No entity-level access control - needed by navbar for menu building)
 router.get(
   "/",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "VIEW" }),
   getAllEntitiesController
 );
 
-// GET /api/masterData/entity/:entityId/children - Get children of parent entity
+// GET /api/masterData/entity/:entityId/children - Get children of parent entity (No entity-level access control)
 router.get(
   "/:entityId/children",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "VIEW" }),
   getChildrenOfParentEntityController
 );
 
-// GET /api/masterData/entity/:entityId - Get entity by ID
+// GET /api/masterData/entity/:entityId - Get entity by ID (No entity-level access control)
 router.get(
   "/:entityId",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "VIEW" }),
   getEntityByIdController
 );
 
 // PUT /api/masterData/entity/:entityId - Update entity
+// System resource - only requires authentication, not entity-level access control
 router.put(
   "/:entityId",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "EDIT" }),
   updateEntityController
 );
 
 // DELETE /api/masterData/entity/:entityId - Delete entity
+// System resource - only requires authentication, not entity-level access control
 router.delete(
   "/:entityId",
-  accessControlMiddleware({ entityKey: "ENTITY", action: "DELETE" }),
   deleteEntityController
 );
 
