@@ -13,14 +13,14 @@ router.use(protect);
 
 router.post(
   "/:companyId/upload",
-  accessControlMiddleware({ entityKey: "Journal", action: "CREATE" }),
+  accessControlMiddleware({ entityKey: "JOURNAL", action: "CREATE" }),
   journalExcelUploadMiddleware.single("file"),
   uploadJournalExcel
 );
 
 router.post(
   "/:companyId/confirm",
-  accessControlMiddleware({ entityKey: "Journal", action: "CREATE" }),
+  accessControlMiddleware({ entityKey: "JOURNAL", action: "CREATE" }),
   confirmJournalExcel
 );
 

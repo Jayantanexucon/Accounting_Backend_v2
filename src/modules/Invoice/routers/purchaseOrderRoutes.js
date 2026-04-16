@@ -18,27 +18,27 @@ const router = express.Router();
 router.use(protect);
 
 // Create PO
-router.post("/", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "CREATE" }), createPurchaseOrder);
+router.post("/", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "CREATE" }), createPurchaseOrder);
 
 // Get all POs (with optional filtering)
-router.get("/", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "READ" }), getAllPurchaseOrders);
+router.get("/", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getAllPurchaseOrders);
 
 // Get PO statistics
-router.get("/stats/overview", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "READ" }), getPOStats);
+router.get("/stats/overview", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPOStats);
 
 // Get POs by status
-router.get("/status/:status", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "READ" }), getPOsByStatus);
+router.get("/status/:status", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPOsByStatus);
 
 // Search by PO number
-router.get("/search/number", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "READ" }), getPurchaseOrderByNumber);
+router.get("/search/number", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPurchaseOrderByNumber);
 
 // Get single PO by ID
-router.get("/:id", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "READ" }), getPurchaseOrderById);
+router.get("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPurchaseOrderById);
 
 // Update PO
-router.put("/:id", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "UPDATE" }), updatePurchaseOrder);
+router.put("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "EDIT" }), updatePurchaseOrder);
 
 // Delete PO
-router.delete("/:id", accessControlMiddleware({ entityKey: "PurchaseOrder", action: "DELETE" }), deletePurchaseOrder);
+router.delete("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "DELETE" }), deletePurchaseOrder);
 
 export default router;

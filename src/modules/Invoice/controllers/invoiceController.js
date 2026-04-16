@@ -17,6 +17,7 @@ import {
   getInvoiceStatsRepo,
   updateInvoicePaymentRepo,
   updateInvoiceAccountingStatusRepo,
+  countInvoicesRepo,
 } from "../repos/invoiceRepo.js";
 import { createJournalRepo } from "../../Account/repos/journalRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
@@ -172,25 +173,39 @@ export const getAllInvoices = async (req, res, next) => {
       throw new AppError("companyId is required", 400, "getAllInvoices");
     }
 
-    let invoices;
+
+    const filter = { companyId };
+    if (status) filter.status = status;
+    if (approvalStatus) filter.approvalStatus = approvalStatus;
 
     if (startDate && endDate) {
-      invoices = await getInvoicesByDateRangeRepo(companyId, startDate, endDate);
-    } else {
-      const filter = { companyId };
-      if (status) filter.status = status;
-      if (approvalStatus) filter.approvalStatus = approvalStatus;
-      const pageNo = Math.max(1, Number(page || 1));
-      const pageLimit = Math.max(0, Number(limit || 0));
-      invoices = await getInvoicesRepo(filter, {
+      filter.invoiceDate = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    const pageNo = Math.max(1, Number(page || 1));
+    const pageLimit = Math.max(0, Number(limit || 0));
+
+    const [invoices, total] = await Promise.all([
+      getInvoicesRepo(filter, {
         limit: pageLimit,
         skip: pageLimit > 0 ? (pageNo - 1) * pageLimit : 0,
-      });
-    }
+        sort: { createdAt: -1 }, // Ensure newest first
+      }),
+      countInvoicesRepo(filter),
+    ]);
 
     new ApiResponse({
       statusCode: 200,
       data: invoices,
+      meta: {
+        total,
+        page: pageNo,
+        limit: pageLimit,
+        totalPages: pageLimit > 0 ? Math.ceil(total / pageLimit) : 1,
+      },
       message: "Invoices retrieved successfully",
     }).send(res);
   } catch (error) {

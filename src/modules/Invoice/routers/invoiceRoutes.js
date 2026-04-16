@@ -31,56 +31,56 @@ const router = express.Router();
 router.use(protect);
 
 // Create invoice
-router.post("/", accessControlMiddleware({ entityKey: "Invoice", action: "CREATE" }), createInvoice);
+router.post("/", accessControlMiddleware({ entityKey: "INVOICE", action: "CREATE" }), createInvoice);
 
 // Create invoice with automatic journal entry (transactional)
-router.post("/with-journal", accessControlMiddleware({ entityKey: "Invoice", action: "CREATE" }), createInvoiceWithJournal);
+router.post("/with-journal", accessControlMiddleware({ entityKey: "INVOICE", action: "CREATE" }), createInvoiceWithJournal);
 
 // Get all invoices (with optional filtering by status, date range)
-router.get("/", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getAllInvoices);
+router.get("/", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getAllInvoices);
 
 // Get invoice statistics
-router.get("/stats/overview", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceStats);
+router.get("/stats/overview", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getInvoiceStats);
 
 // Tax flow reports
-router.get("/reports/po-tax", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getPOTaxReport);
-router.get("/reports/client-tax", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getClientTaxReport);
-router.get("/reports/tax-summary", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getTaxSummary);
+router.get("/reports/po-tax", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getPOTaxReport);
+router.get("/reports/client-tax", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getClientTaxReport);
+router.get("/reports/tax-summary", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getTaxSummary);
 
 // Get pending approvals
-router.get("/approvals/pending", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getPendingApprovals);
+router.get("/approvals/pending", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getPendingApprovals);
 
 // Search by invoice number
-router.get("/search/number", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceByNumber);
+router.get("/search/number", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getInvoiceByNumber);
 
 // Get invoices for a specific PO
-router.get("/po/:poId", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoicesByPO);
+router.get("/po/:poId", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getInvoicesByPO);
 
 // Get single invoice by ID
-router.get("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceById);
+router.get("/:id", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), getInvoiceById);
 
 // Update invoice
-router.put("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), updateInvoice);
+router.put("/:id", accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }), updateInvoice);
 
 // Delete invoice
-router.delete("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "DELETE" }), deleteInvoice);
+router.delete("/:id", accessControlMiddleware({ entityKey: "INVOICE", action: "DELETE" }), deleteInvoice);
 
 // Approve invoice
-router.post("/:id/approve", accessControlMiddleware({ entityKey: "Invoice", action: "APPROVE" }), approveInvoice);
+router.post("/:id/approve", accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }), approveInvoice);
 
 // Reject invoice
-router.post("/:id/reject", accessControlMiddleware({ entityKey: "Invoice", action: "APPROVE" }), rejectInvoice);
+router.post("/:id/reject", accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }), rejectInvoice);
 
 // Record payment
-router.post("/:id/payment", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), recordPayment);
+router.post("/:id/payment", accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }), recordPayment);
 
 // Post sales journal
-router.post("/:id/post-sales-journal", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), postSalesJournal);
+router.post("/:id/post-sales-journal", accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }), postSalesJournal);
 
 // Export single invoice
-router.get("/:id/export", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), exportInvoiceById);
+router.get("/:id/export", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), exportInvoiceById);
 
 // Export invoice list
-router.get("/export/list/all", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), exportInvoiceListEndpoint);
+router.get("/export/list/all", accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }), exportInvoiceListEndpoint);
 
 export default router;

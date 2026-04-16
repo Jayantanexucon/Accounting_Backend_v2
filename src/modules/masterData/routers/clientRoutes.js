@@ -20,56 +20,56 @@ router.use(protect);
 // POST /api/client/create/:companyId - Create client
 router.post(
   "/create/:companyId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "CREATE" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "CREATE" }),
   createClientController
 );
 
 // GET /api/client/paginated - Get paginated clients
 router.get(
   "/paginated",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientsPaginatedController
 );
 
 // GET /api/client/pending/:companyId - Get pending client requests
 router.get(
   "/pending/:companyId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getPendingClientRequestsController
 );
 
 // PUT /api/client/status/:clientId - Update client status
 router.put(
   "/status/:clientId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "EDIT" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "EDIT" }),
   clientStatusController
 );
 
 // GET /api/client - Get all clients
 router.get(
   "/",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientsController
 );
 
 // GET /api/client/:id - Get client by ID
 router.get(
   "/:clientId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientByIdController
 );
 
 // PUT /api/client/:id - Update client
 router.put(
   "/:clientId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "EDIT" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "EDIT" }),
   updateClientController
 );
 
 // DELETE /api/client/:id - Delete client
 router.delete(
   "/:clientId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "DELETE" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "DELETE" }),
   deleteClientController
 );
 
