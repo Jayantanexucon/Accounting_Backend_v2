@@ -28,6 +28,38 @@ const getAbsoluteAmount = (value) => Math.abs(Number(value || 0));
 const getRemainingAmount = (totalAmount, allocatedAmount) =>
   Math.max(0, getAbsoluteAmount(totalAmount) - getAbsoluteAmount(allocatedAmount));
 
+const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const normalizeTransactionType = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (["CR", "CREDIT", "DEPOSIT", "RECEIPT"].includes(normalized)) return "CREDIT";
+  if (["DR", "DEBIT", "WITHDRAWAL", "PAYMENT"].includes(normalized)) return "DEBIT";
+  return normalized || null;
+};
+
+const areTransactionDirectionsCompatible = (bankTx, ledgerTx) => {
+  const bankType = normalizeTransactionType(bankTx?.type);
+  const ledgerType = normalizeTransactionType(ledgerTx?.transactionType);
+
+  if (!bankType || !ledgerType) return false;
+
+  // Bank statement direction is opposite to book bank-ledger direction:
+  // statement CREDIT -> book DEBIT, statement DEBIT -> book CREDIT
+  return (
+    (bankType === "CREDIT" && ledgerType === "DEBIT") ||
+    (bankType === "DEBIT" && ledgerType === "CREDIT")
+  );
+};
+
+const logReconciliation = (stage, payload = {}) => {
+  const shouldLog =
+    process.env.RECONCILIATION_DEBUG === "true" ||
+    process.env.NODE_ENV !== "production";
+
+  if (!shouldLog) return;
+  console.log(`[BRS][${stage}]`, payload);
+};
+
 /**
  * Calculates match score between a bank transaction and an accounting entry
  * IF reference matches AND amount matches: score = 100
@@ -40,34 +72,91 @@ const calculateScore = (bankTx, ledgerTx) => {
 
   const bankAmount = Math.abs(bankTx.amount);
   const ledgerAmount = Math.abs(ledgerTx.amount);
+  const directionsCompatible = areTransactionDirectionsCompatible(bankTx, ledgerTx);
 
   const bankDate = new Date(bankTx.date || bankTx.transactionDate);
   const ledgerDate = new Date(ledgerTx.date);
   const dateDiffDays = Math.abs(bankDate - ledgerDate) / (1000 * 60 * 60 * 24);
 
-  // 1. Reference + Amount match (Score 100)
+  const reasons = [];
+  const failures = [];
+  let score = 0;
+
+  if (!directionsCompatible) {
+    failures.push(
+      `Direction mismatch: bank=${normalizeTransactionType(bankTx.type) || "UNKNOWN"} book=${normalizeTransactionType(ledgerTx.transactionType) || "UNKNOWN"}`
+    );
+    return {
+      score: 0,
+      reasons,
+      failures,
+      facts: {
+        bankRef,
+        ledgerRef,
+        bankAmount: formatAmount(bankAmount),
+        ledgerAmount: formatAmount(ledgerAmount),
+        dateDiffDays: dateDiffDays.toFixed(0),
+        bankDescription: bankTx.description || "",
+        ledgerNarration: ledgerTx.narration || "",
+        bankType: normalizeTransactionType(bankTx.type),
+        ledgerType: normalizeTransactionType(ledgerTx.transactionType),
+      },
+    };
+  }
+
   if (bankRef && ledgerRef && bankRef === ledgerRef && bankAmount === ledgerAmount) {
-    return 100;
+    score = 100;
+    reasons.push("Exact reference match");
+    reasons.push("Exact amount match");
+  }
+  else if (bankAmount === ledgerAmount && dateDiffDays <= 2) {
+    score = 80;
+    reasons.push("Exact amount match");
+    reasons.push(`Date within ${dateDiffDays.toFixed(0)} day(s)`);
+  }
+  else if (bankAmount === ledgerAmount && hasStrongTextMatch(bankTx.description, ledgerTx.narration)) {
+    score = 100;
+    reasons.push("Exact amount match");
+    reasons.push("Strong narration/description match");
+  }
+  else {
+    const bankDesc = normalize(bankTx.description);
+    const ledgerNar = normalize(ledgerTx.narration);
+    if (bankDesc && ledgerNar && (bankDesc.includes(ledgerNar) || ledgerNar.includes(bankDesc))) {
+      score = 60;
+      reasons.push("Partial narration/description match");
+    }
   }
 
-  // 2. Amount match + Date proximity (<= 2 days) (Score 80)
-  if (bankAmount === ledgerAmount && dateDiffDays <= 2) {
-    return 80;
+  if (bankAmount !== ledgerAmount) {
+    failures.push(`Amount mismatch: bank=${formatAmount(bankAmount)} book=${formatAmount(ledgerAmount)}`);
+  }
+  if (!bankRef || !ledgerRef || bankRef !== ledgerRef) {
+    failures.push(`Reference mismatch: bank=${bankRef || "EMPTY"} book=${ledgerRef || "EMPTY"}`);
+  }
+  if (dateDiffDays > 2) {
+    failures.push(`Date gap too high: ${dateDiffDays.toFixed(0)} day(s)`);
+  }
+  if (!hasStrongTextMatch(bankTx.description, ledgerTx.narration)) {
+    failures.push("Narration/description is not a strong match");
   }
 
-  // 3. Amount match + strong narration similarity (treat as exact for bank-vs-books text matches)
-  if (bankAmount === ledgerAmount && hasStrongTextMatch(bankTx.description, ledgerTx.narration)) {
-    return 100;
-  }
-
-  // 3. Narration similarity (Score 60)
-  const bankDesc = normalize(bankTx.description);
-  const ledgerNar = normalize(ledgerTx.narration);
-  if (bankDesc && ledgerNar && (bankDesc.includes(ledgerNar) || ledgerNar.includes(bankDesc))) {
-    return 60;
-  }
-
-  return 0;
+  return {
+    score,
+    reasons,
+    failures,
+    facts: {
+      bankRef,
+      ledgerRef,
+      bankAmount: formatAmount(bankAmount),
+      ledgerAmount: formatAmount(ledgerAmount),
+      dateDiffDays: dateDiffDays.toFixed(0),
+      bankDescription: bankTx.description || "",
+      ledgerNarration: ledgerTx.narration || "",
+      bankType: normalizeTransactionType(bankTx.type),
+      ledgerType: normalizeTransactionType(ledgerTx.transactionType),
+    },
+  };
 };
 
 const getStatusFromAmounts = (totalAmount, allocatedAmount) => {
@@ -80,6 +169,9 @@ const getStatusFromAmounts = (totalAmount, allocatedAmount) => {
 };
 
 export const BankReconciliationService = {
+  areTransactionDirectionsCompatible,
+  normalizeTransactionType,
+
   async syncAllocationStatus(bankTransactionId, bankLedgerTransactionId) {
     const BankTransaction = await getBankTransactionModel();
     const BankLedgerTransaction = await getBankLedgerTransactionModel();
@@ -178,9 +270,23 @@ export const BankReconciliationService = {
     const Allocation = await getBankReconciliationAllocationModel();
 
     const ledgerTx = await BankLedgerTransaction.findById(ledgerTxId).lean();
-    if (!ledgerTx || ledgerTx.isReconciled) return null;
+    if (!ledgerTx || ledgerTx.isReconciled) {
+      logReconciliation("SKIP_LEDGER", {
+        ledgerTxId,
+        reason: !ledgerTx ? "Ledger transaction not found" : "Ledger transaction already reconciled",
+      });
+      return null;
+    }
 
     const { companyId, bankLedgerId } = ledgerTx;
+    logReconciliation("START_AUTO", {
+      ledgerTxId: String(ledgerTx._id),
+      bankLedgerId: String(bankLedgerId),
+      amount: formatAmount(ledgerTx.amount),
+      reference: ledgerTx.referenceNo || "",
+      narration: ledgerTx.narration || "",
+      date: ledgerTx.date,
+    });
 
     // Fetch candidate bank transactions for this ledger that are not yet fully matched
     const candidates = await BankTransaction.find({
@@ -188,17 +294,44 @@ export const BankReconciliationService = {
       bankLedgerId,
       reconciliationStatus: { $ne: "MATCHED" },
     }).lean();
+    logReconciliation("CANDIDATES_FOUND", {
+      ledgerTxId: String(ledgerTx._id),
+      candidateCount: candidates.length,
+    });
 
     let bestMatch = null;
     let highestScore = 0;
+    let bestEvaluation = null;
 
     for (const bankTx of candidates) {
-      const score = calculateScore(bankTx, ledgerTx);
-      if (score > highestScore) {
-        highestScore = score;
+      const evaluation = calculateScore(bankTx, ledgerTx);
+      logReconciliation("CANDIDATE_EVALUATED", {
+        ledgerTxId: String(ledgerTx._id),
+        bankTransactionId: String(bankTx._id),
+        bankReference: bankTx.referenceNo || bankTx.reference || "",
+        bankDescription: bankTx.description || "",
+        bankAmount: formatAmount(bankTx.amount),
+        bankDate: bankTx.date || bankTx.transactionDate,
+        score: evaluation.score,
+        reasons: evaluation.reasons,
+        failures: evaluation.failures,
+        facts: evaluation.facts,
+      });
+
+      if (evaluation.score > highestScore) {
+        highestScore = evaluation.score;
         bestMatch = bankTx;
+        bestEvaluation = evaluation;
       }
     }
+
+    logReconciliation("BEST_CANDIDATE", {
+      ledgerTxId: String(ledgerTx._id),
+      bestBankTransactionId: bestMatch ? String(bestMatch._id) : null,
+      highestScore,
+      reasons: bestEvaluation?.reasons || [],
+      failures: bestEvaluation?.failures || [],
+    });
 
     // AUTO MATCH decision (Score >= 100 as per CORE PRINCIPLE Flow 5)
     if (highestScore >= 100) {
@@ -214,6 +347,13 @@ export const BankReconciliationService = {
       const remainingLedgerAmount = getRemainingAmount(ledgerTx.amount, ledgerAllocated);
 
       const allocationAmount = Math.min(remainingLedgerAmount, remainingBankAmount);
+      logReconciliation("ALLOCATION_CHECK", {
+        ledgerTxId: String(ledgerTx._id),
+        bankTransactionId: String(bestMatch._id),
+        remainingBankAmount: formatAmount(remainingBankAmount),
+        remainingLedgerAmount: formatAmount(remainingLedgerAmount),
+        allocationAmount: formatAmount(allocationAmount),
+      });
 
       if (allocationAmount > 0) {
         const allocation = await Allocation.create({
@@ -224,14 +364,39 @@ export const BankReconciliationService = {
           allocatedAmount: allocationAmount,
           matchType: "AUTO",
           matchScore: highestScore,
-          reasons: [`Auto matched with score ${highestScore}`],
+          reasons: [
+            `Auto matched with score ${highestScore}`,
+            ...(bestEvaluation?.reasons || []),
+          ],
         });
 
         await this.syncAllocationStatus(bestMatch._id, ledgerTxId);
+        logReconciliation("AUTO_MATCH_SUCCESS", {
+          ledgerTxId: String(ledgerTx._id),
+          bankTransactionId: String(bestMatch._id),
+          allocationId: String(allocation._id),
+          allocationAmount: formatAmount(allocationAmount),
+          reasons: bestEvaluation?.reasons || [],
+        });
 
         return allocation;
       }
+
+      logReconciliation("AUTO_MATCH_BLOCKED", {
+        ledgerTxId: String(ledgerTx._id),
+        bankTransactionId: String(bestMatch._id),
+        reason: "Allocation amount resolved to zero",
+      });
     }
+
+    logReconciliation("AUTO_MATCH_FAILED", {
+      ledgerTxId: String(ledgerTx._id),
+      reason: highestScore < 100 ? "No candidate reached auto-match threshold" : "No valid allocation amount",
+      highestScore,
+      bestBankTransactionId: bestMatch ? String(bestMatch._id) : null,
+      reasons: bestEvaluation?.reasons || [],
+      failures: bestEvaluation?.failures || [],
+    });
 
     return null;
   },

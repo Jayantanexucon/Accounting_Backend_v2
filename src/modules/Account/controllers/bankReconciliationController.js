@@ -22,6 +22,17 @@ const handleControllerError = (error, res) => {
   });
 };
 
+const parseImportDate = (value) => {
+  if (value == null || value === "") return null;
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1970) {
+    return parsed;
+  }
+
+  return null;
+};
+
 /**
  * Normalizes output for frontend compatibility
  */
@@ -245,25 +256,42 @@ export const importBankTransactions = async (req, res, next) => {
     const { companyId, transactions } = req.body;
     const BankTransaction = await getBankTransactionModel();
 
-    const docs = transactions.map(t => ({
-      companyId,
-      date: new Date(t.transactionDate || t.date),
-      transactionDate: new Date(t.transactionDate || t.date),
-      amount: Math.abs(t.amount || 0),
-      type: (t.type || "CREDIT").toUpperCase(),
-      referenceNo: String(t.reference || t.UTR || "").trim().toUpperCase(),
-      normalizedReference: String(t.reference || t.UTR || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
-      reference: String(t.reference || t.UTR || "").trim().toUpperCase(),
-      description: t.description || "",
-      bankLedgerId: t.bankLedgerId, // Frontend should provide this
-      balance: t.balance ?? null,
-      valueDate: t.valueDate ? new Date(t.valueDate) : null,
-      fileName: t.fileName || "",
-      reconciliationStatus: "UNMATCHED",
-      isReconciled: false,
-      createdBy: req.user?.id,
-      updatedBy: req.user?.id,
-    }));
+    if (!companyId) {
+      throw new AppError("companyId is required", 400);
+    }
+
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      throw new AppError("At least one bank transaction is required for import", 400);
+    }
+
+    const docs = transactions.map((t, index) => {
+      const transactionDate = parseImportDate(t.transactionDate || t.date);
+      const valueDate = parseImportDate(t.valueDate);
+
+      if (!transactionDate) {
+        throw new AppError(`Invalid transaction date at import row ${index + 1}`, 400);
+      }
+
+      return {
+        companyId,
+        date: transactionDate,
+        transactionDate,
+        amount: Math.abs(t.amount || 0),
+        type: (t.type || "CREDIT").toUpperCase(),
+        referenceNo: String(t.reference || t.UTR || "").trim().toUpperCase(),
+        normalizedReference: String(t.reference || t.UTR || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
+        reference: String(t.reference || t.UTR || "").trim().toUpperCase(),
+        description: t.description || "",
+        bankLedgerId: t.bankLedgerId, // Frontend should provide this
+        balance: t.balance ?? null,
+        valueDate,
+        fileName: t.fileName || "",
+        reconciliationStatus: "UNMATCHED",
+        isReconciled: false,
+        createdBy: req.user?.id,
+        updatedBy: req.user?.id,
+      };
+    });
 
     const inserted = await BankTransaction.insertMany(docs);
     const bankLedgerIds = [...new Set(inserted.map(item => String(item.bankLedgerId)).filter(Boolean))];
@@ -273,8 +301,12 @@ export const importBankTransactions = async (req, res, next) => {
 
     new ApiResponse({
       statusCode: 201,
-      data: { count: inserted.length },
-      message: "Imported successfully",
+      data: {
+        count: inserted.length,
+        importedCount: inserted.length,
+        bankLedgerIds,
+      },
+      message: "Bank statement uploaded successfully",
     }).send(res);
   } catch (error) {
     return handleControllerError(error, res);
@@ -306,13 +338,30 @@ export const autoReconcileBankTransactions = async (req, res, next) => {
         allocatedAmount: item.allocatedAmount,
       })));
     }
+
+    const exactMatchCount = exactMatches.length;
+    const potentialMatchCount = 0;
+    const noMatches = exactMatchCount === 0 && potentialMatchCount === 0;
     
     new ApiResponse({
       statusCode: 200,
-      data: { exactMatches, potentialMatches: [] },
-      message: bankLedgerId 
-        ? "Auto reconciliation completed for selected account" 
-        : "Auto reconciliation completed for all accounts",
+      data: {
+        exactMatches,
+        potentialMatches: [],
+        noMatches,
+        summary: {
+          processedLedgerCount: targetLedgerIds.length,
+          exactMatchCount,
+          potentialMatchCount,
+        },
+      },
+      message: noMatches
+        ? bankLedgerId
+          ? "No matching transactions found for the selected account"
+          : "No matching transactions found during auto reconciliation"
+        : bankLedgerId
+          ? "Auto reconciliation completed for selected account"
+          : "Auto reconciliation completed for all accounts",
     }).send(res);
   } catch (error) {
     return handleControllerError(error, res);
@@ -326,11 +375,23 @@ export const manualReconcileBankTransaction = async (req, res) => {
     const BankTransaction = await getBankTransactionModel();
     const BankLedgerTransaction = await getBankLedgerTransactionModel();
     const Payment = await getPaymentModel();
+    const bankTx = await BankTransaction.findById(bankTransactionId).lean();
+
+    if (!bankTx) {
+      throw new AppError("Bank transaction not found", 404);
+    }
 
     for (const m of matches) {
       const bankLedgerTransactionId = m.paymentId;
       const ledgerTx = await BankLedgerTransaction.findById(bankLedgerTransactionId).lean();
       if (!ledgerTx) continue;
+
+      if (!BankReconciliationService.areTransactionDirectionsCompatible(bankTx, ledgerTx)) {
+        throw new AppError(
+          `Direction mismatch: statement ${BankReconciliationService.normalizeTransactionType(bankTx.type) || "UNKNOWN"} cannot reconcile with book ${BankReconciliationService.normalizeTransactionType(ledgerTx.transactionType) || "UNKNOWN"}`,
+          400
+        );
+      }
 
       const payment = await Payment.findOne({ journalId: ledgerTx.journalId }).lean();
 
@@ -461,6 +522,17 @@ export const createPaymentFromBankTransaction = async (req, res, next) => {
       .sort({ createdAt: 1 })
       .lean();
 
+    const compatibleLedgerTransactions = createdLedgerTransactions.filter((ledgerTx) =>
+      BankReconciliationService.areTransactionDirectionsCompatible(bankTransaction, ledgerTx)
+    );
+
+    if (!compatibleLedgerTransactions.length) {
+      throw new AppError(
+        `Direction mismatch: statement ${BankReconciliationService.normalizeTransactionType(bankTransaction.type) || "UNKNOWN"} does not match the generated book entry direction`,
+        400
+      );
+    }
+
     const existingBankAllocations = await Allocation.find({ bankTransactionId }).lean();
     const alreadyAllocatedToBank = existingBankAllocations.reduce(
       (sum, item) => sum + Number(item.allocatedAmount || 0),
@@ -468,7 +540,7 @@ export const createPaymentFromBankTransaction = async (req, res, next) => {
     );
     let remainingBankAmount = Math.max(0, Number(bankTransaction.amount || 0) - alreadyAllocatedToBank);
 
-    for (const ledgerTx of createdLedgerTransactions) {
+    for (const ledgerTx of compatibleLedgerTransactions) {
       if (remainingBankAmount <= 0) break;
 
       const existingLedgerAllocations = await Allocation.find({
