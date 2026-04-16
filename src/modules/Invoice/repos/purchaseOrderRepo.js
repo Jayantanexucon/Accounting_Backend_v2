@@ -1,6 +1,41 @@
 import AppError from "../../../utils/AppError.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
 
+// Helper: Recalculate totalAmount for items if missing (data stored before fix)
+const recalculateItemTotals = (po) => {
+  if (!Array.isArray(po.items)) return po;
+
+  let recalculated = false;
+  const items = po.items.map(item => {
+    // If totalAmount is 0 but we have taxableValue and gstAmount, recalculate
+    if ((item.totalAmount === 0 || !item.totalAmount) && (item.taxableValue || item.gstAmount)) {
+      item.totalAmount = Number(item.taxableValue || 0) + Number(item.gstAmount || 0);
+      recalculated = true;
+    }
+    return item;
+  });
+
+  // Recalculate PO-level totals if items were recalculated
+  if (recalculated) {
+    const totalTaxableValue = items.reduce((sum, item) => sum + Number(item.taxableValue || 0), 0);
+    const totalGSTAmount = items.reduce((sum, item) => sum + Number(item.gstAmount || 0), 0);
+    const totalAmount = items.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
+
+    po.items = items;
+    po.totalTaxableValue = Math.round(totalTaxableValue * 100) / 100;
+    po.totalGSTAmount = Math.round(totalGSTAmount * 100) / 100;
+    po.totalAmount = Math.round(totalAmount * 100) / 100;
+    
+    // Recalculate CGST/SGST/IGST if empty
+    if (!po.totalCGSTAmount && !po.totalSGSTAmount && po.totalGSTAmount > 0) {
+      po.totalCGSTAmount = Math.round((totalGSTAmount / 2) * 100) / 100;
+      po.totalSGSTAmount = Math.round((totalGSTAmount / 2) * 100) / 100;
+    }
+  }
+
+  return po;
+};
+
 export const createPurchaseOrderRepo = async (poData) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
@@ -21,11 +56,15 @@ export const createPurchaseOrderRepo = async (poData) => {
 export const getPurchaseOrderByIdRepo = async (id) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findById(id).lean();
+    let po = await PurchaseOrder.findById(id).lean();
 
     if (!po) {
       throw new AppError("Purchase Order not found", 404, "getPurchaseOrderByIdRepo");
     }
+    
+    // Recalculate missing totals for old data
+    po = recalculateItemTotals(po);
+    
     if (po) po.client = po.vendor;
     return po;
   } catch (error) {
@@ -39,13 +78,20 @@ export const getPurchaseOrdersRepo = async (filter = {}, options = {}) => {
     const PurchaseOrder = await getPurchaseOrderModel();
     const { sort = { poDate: -1 }, limit = 0, skip = 0 } = options;
 
-    const pos = await PurchaseOrder.find(filter)
+    let pos = await PurchaseOrder.find(filter)
       .sort(sort)
       .limit(limit)
       .skip(skip)
       .lean();
 
-    return pos.map(po => ({ ...po, client: po.vendor }));
+    // Recalculate missing totals for old data
+    pos = pos.map(po => {
+      po = recalculateItemTotals(po);
+      po.client = po.vendor;
+      return po;
+    });
+
+    return pos;
   } catch (error) {
     throw new AppError(error.message || "Error retrieving POs", 500, "getPurchaseOrdersRepo");
   }
@@ -54,11 +100,15 @@ export const getPurchaseOrdersRepo = async (filter = {}, options = {}) => {
 export const getPurchaseOrderByNumberRepo = async (poNumber, companyId) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findOne({ poNumber, companyId }).lean();
+    let po = await PurchaseOrder.findOne({ poNumber, companyId }).lean();
 
     if (!po) {
       throw new AppError("Purchase Order not found with this number", 404, "getPurchaseOrderByNumberRepo");
     }
+    
+    // Recalculate missing totals for old data
+    po = recalculateItemTotals(po);
+    
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;

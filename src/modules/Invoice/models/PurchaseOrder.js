@@ -47,7 +47,7 @@ const addressSchema = new mongoose.Schema(
 const poMilestoneSchema = new mongoose.Schema(
   {
     milestoneNo: { type: Number },
-    title: { type: String, required: true },
+    title: { type: String,  },
     description: { type: String },
     dueDate: { type: Date },
     targetDate: { type: Date },

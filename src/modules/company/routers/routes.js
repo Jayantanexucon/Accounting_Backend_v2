@@ -10,7 +10,7 @@ import { protect } from "../../../middlewares/authMiddleware.js";
 const router = express.Router();
 
 // All routes are protected
-router.use(protect);
+// router.use(protect);
 
 // Create a new company
 router.post("/", addCompanyController);
