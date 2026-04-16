@@ -102,6 +102,7 @@ export const createPurchaseOrder = async (req, res, next) => {
         ...item,
         hsnId: item.hsnId ? String(item.hsnId) : undefined,
         hsnSac: item.hsnSac || "",
+        unit: item.unit || "each",   // Default to "each" if not provided
         gstRate: Number(item.gstRate) || 0,
         gstAmount: Number(item.gstAmount) || 0,
         taxableValue: Number(item.taxableValue) || 0,

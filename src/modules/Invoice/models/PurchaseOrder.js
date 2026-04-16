@@ -12,6 +12,11 @@ const poLineItemSchema = new mongoose.Schema(
     hsnSac: { type: String },   // HSN/SAC code string e.g. "998314"
     hsnId: { type: String },   // ID from HSN module — stored as String, no ref
     quantity: { type: Number, required: true, min: 0 },
+    unit: { 
+      type: String, 
+      enum: ["each", "hour"],
+      default: "each"
+    },   // Unit of measurement — can be "each" or "hour"
     rate: { type: Number, required: true, min: 0 },
     taxableValue: { type: Number, required: true, min: 0 },
     gstRate: { type: Number, default: 0, min: 0 },
