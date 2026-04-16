@@ -15,18 +15,18 @@ const router = express.Router();
 
 router.use(protect);
 
-router.post("/", accessControlMiddleware({ entityKey: "Account", action: "CREATE" }), createAccount);
+router.post("/", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "CREATE" }), createAccount);
 
-router.get("/", getAllAccounts);
+router.get("/", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getAllAccounts);
 
-router.get("/code/search", getAccountByCode);
+router.get("/code/search", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getAccountByCode);
 
-router.get("/ledger/report", getLedger);
+router.get("/ledger/report", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getLedger);
 
-router.get("/:id", getAccountById);
+router.get("/:id", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getAccountById);
 
-router.put("/:id", accessControlMiddleware({ entityKey: "Account", action: "UPDATE" }), updateAccount);
+router.put("/:id", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "EDIT" }), updateAccount);
 
-router.delete("/:id", accessControlMiddleware({ entityKey: "Account", action: "DELETE" }), deleteAccount);
+router.delete("/:id", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "DELETE" }), deleteAccount);
 
 export default router;

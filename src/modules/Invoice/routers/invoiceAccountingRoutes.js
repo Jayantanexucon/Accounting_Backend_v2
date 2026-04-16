@@ -16,37 +16,37 @@ router.use(protect);
 
 router.get(
   "/validate-accounts/:companyId",
-  accessControlMiddleware({ entityKey: "Invoice", action: "READ" }),
+  accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }),
   validateInvoiceAccounts
 );
 
 router.post(
   "/:companyId/create-ledger",
-  accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }),
+  accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }),
   createClientLedgerFromInvoice
 );
 
 router.post(
   "/:companyId/create-journal",
-  accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }),
+  accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }),
   createJournalFromInvoice
 );
 
 router.post(
   "/:companyId/complete-accounting",
-  accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }),
+  accessControlMiddleware({ entityKey: "INVOICE", action: "EDIT" }),
   completeInvoiceAccounting
 );
 
 router.get(
   "/:companyId/status/:invoiceId",
-  accessControlMiddleware({ entityKey: "Invoice", action: "READ" }),
+  accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }),
   getInvoiceAccountingStatus
 );
 
 router.post(
   "/:companyId/record-payment",
-  accessControlMiddleware({ entityKey: "Payment", action: "CREATE" }),
+  accessControlMiddleware({ entityKey: "PAYMENT", action: "CREATE" }),
   recordInvoicePayment
 );
 

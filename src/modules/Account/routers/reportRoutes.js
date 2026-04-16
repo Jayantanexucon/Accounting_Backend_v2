@@ -26,7 +26,7 @@ router.use(protect);
 // GET /api/accounting/report/:companyId/ledger?accountId=xxx&startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/ledger",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }),
   getLedgerReportHandler
 );
 
@@ -34,7 +34,7 @@ router.get(
 // GET /api/accounting/report/:companyId/general-ledger?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/general-ledger",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }),
   getGeneralLedgerHandler
 );
 
@@ -46,7 +46,7 @@ router.get(
 // GET /api/accounting/report/:companyId/trial-balance?asOfDate=xxx
 router.get(
   "/:companyId/trial-balance",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "TRIAL BALANCE", action: "VIEW" }),
   getTrialBalanceHandler
 );
 
@@ -54,7 +54,7 @@ router.get(
 // GET /api/accounting/report/:companyId/trial-balance-period?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/trial-balance-period",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "TRIAL BALANCE", action: "VIEW" }),
   getTrialBalancePeriodHandler
 );
 
@@ -62,7 +62,7 @@ router.get(
 // GET /api/accounting/report/:companyId/validate-trial-balance?asOfDate=xxx
 router.get(
   "/:companyId/validate-trial-balance",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "TRIAL BALANCE", action: "VIEW" }),
   validateTrialBalanceHandler
 );
 
@@ -74,7 +74,7 @@ router.get(
 // GET /api/accounting/report/:companyId/balance-sheet?asOfDate=xxx
 router.get(
   "/:companyId/balance-sheet",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "BALANCE SHEET", action: "VIEW" }),
   getBalanceSheetHandler
 );
 
@@ -82,7 +82,7 @@ router.get(
 // GET /api/accounting/report/:companyId/profit-loss?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/profit-loss",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "PROFIT AND LOSS", action: "VIEW" }),
   getProfitAndLossHandler
 );
 
@@ -90,14 +90,14 @@ router.get(
 // GET /api/accounting/report/:companyId/financial-statements?statementDate=xxx
 router.get(
   "/:companyId/financial-statements",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }),
   getFinancialStatementsHandler
 );
 
 // Business insights / management summary
 router.get(
   "/:companyId/business-insights",
-  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
+  accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }),
   getBusinessInsightsHandler
 );
 
