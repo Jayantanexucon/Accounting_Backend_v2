@@ -1,6 +1,7 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
+import { getBankLedgerTransactionModel } from "../models/BankLedgerTransaction.js";
 import {
   sumJournalLineAmounts,
 } from "../utils/balanceComputation.util.js";
@@ -43,6 +44,7 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
   }
 
   const JournalLine = await getJournalLineModel();
+  const BankLedgerTransaction = await getBankLedgerTransactionModel();
   const journalLines = await JournalLine.find({
     accountId,
     companyId,
@@ -52,6 +54,16 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       select: "number date narration sourceType referenceNumber partyName externalDocNo createdAt voucherType status approvalStatus",
     })
     .lean();
+
+  const bankLedgerTransactions = (account.groupName || "").toUpperCase().includes("BANK")
+    ? await BankLedgerTransaction.find({
+        companyId,
+        bankLedgerId: accountId,
+      }).lean()
+    : [];
+  const bankLedgerTxByJournalLineId = new Map(
+    bankLedgerTransactions.map((tx) => [String(tx.journalLineId), tx])
+  );
 
   let openingBalance = account.openingBalance || 0;
   const filteredLines = [];
@@ -115,6 +127,13 @@ export const getLedgerReport = async (accountId, companyId, startDate, endDate, 
       referenceNumber: line.journalId?.referenceNumber || line.journalId?.number || "",
       partyName: line.journalId?.partyName || "",
       externalDocNo: line.journalId?.externalDocNo || "",
+      reconciliationStatus: bankLedgerTxByJournalLineId.get(String(line._id))?.reconciliationStatus || "UNMATCHED",
+      isReconciled: Boolean(bankLedgerTxByJournalLineId.get(String(line._id))?.isReconciled),
+      allocatedAmount: Number(bankLedgerTxByJournalLineId.get(String(line._id))?.allocatedAmount || 0),
+      unreconciledAmount: Math.max(
+        0,
+        Math.abs(debit || credit) - Number(bankLedgerTxByJournalLineId.get(String(line._id))?.allocatedAmount || 0)
+      ),
     });
   }
 
