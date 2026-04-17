@@ -143,7 +143,7 @@ const purchaseOrderSchema = new mongoose.Schema(
       type: String,
       enum: [
         "milestone", "monthly", "hourly",
-        "advance", "immediate",
+        "advance", "immediate","weekly",
         "net-15", "net-30", "net-45", "net-60", "net-90",
         "on_milestone", "on_delivery", "cod",
       ],
