@@ -12,6 +12,7 @@ export const findAuditLogs = async (query, options = {}) => {
     const { limit = 100, skip = 0, sort = { timestamp: -1 } } = options;
 
     const logs = await AuditLog.find(query)
+      .populate("performedBy", "name email role")
       .sort(sort)
       .limit(parseInt(limit))
       .skip(parseInt(skip))
@@ -163,10 +164,17 @@ export const getEntityAuditStats = async (companyId, entityId, entityType) => {
         $group: {
           _id: "$performedBy",
           count: { $sum: 1 },
-          email: { $first: "$performedByEmail" },
-          role: { $first: "$performedByRole" },
+          user: { $first: "$performedByEmail" },
           firstChange: { $min: "$timestamp" },
           lastChange: { $max: "$timestamp" },
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "userData",
         },
       },
       {

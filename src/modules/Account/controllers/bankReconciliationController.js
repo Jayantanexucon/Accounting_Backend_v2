@@ -33,6 +33,52 @@ const parseImportDate = (value) => {
   return null;
 };
 
+const getAbsoluteAmount = (value) => Math.abs(Number(value || 0));
+
+const getAllocatedAmount = (allocations = []) =>
+  allocations.reduce((sum, item) => sum + getAbsoluteAmount(item?.allocatedAmount), 0);
+
+const getReconciliationStatus = (totalAmount, allocatedAmount) => {
+  const total = getAbsoluteAmount(totalAmount);
+  const allocated = Math.min(total, getAbsoluteAmount(allocatedAmount));
+
+  if (allocated <= 0) return "UNMATCHED";
+  if (allocated >= total) return "MATCHED";
+  return "PARTIAL";
+};
+
+const getMonthKey = (value) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "unknown";
+  return parsed.toISOString().slice(0, 7);
+};
+
+const createMonthlySummaryBucket = (month) => ({
+  month,
+  bankTransactions: {
+    count: 0,
+    totalAmount: 0,
+    allocatedAmount: 0,
+    unallocatedAmount: 0,
+    matched: { count: 0, amount: 0 },
+    partial: { count: 0, amount: 0 },
+    unmatched: { count: 0, amount: 0 },
+  },
+  journalEntries: {
+    count: 0,
+    totalAmount: 0,
+    allocatedAmount: 0,
+    unallocatedAmount: 0,
+    matched: { count: 0, amount: 0 },
+    partial: { count: 0, amount: 0 },
+    unmatched: { count: 0, amount: 0 },
+  },
+  allocations: {
+    count: 0,
+    totalAmount: 0,
+  },
+});
+
 /**
  * Normalizes output for frontend compatibility
  */
@@ -246,6 +292,314 @@ export const getReconciliationOverview = async (req, res, next) => {
       message: "Overview retrieved",
     }).send(res);
 
+  } catch (error) {
+    return handleControllerError(error, res);
+  }
+};
+
+export const getMonthlyReconciliationReport = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { bankLedgerId, startDate, endDate } = req.query;
+
+    if (!bankLedgerId) {
+      throw new AppError("bankLedgerId is required", 400);
+    }
+
+    const Account = await getAccountModel();
+    const BankTransaction = await getBankTransactionModel();
+    const Allocation = await getBankReconciliationAllocationModel();
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
+    const Journal = await getJournalModel();
+
+    const bankLedger = await Account.findOne({ _id: bankLedgerId, companyId }).lean();
+    if (!bankLedger) {
+      throw new AppError("Selected bank ledger was not found for this company", 404);
+    }
+
+    await BankReconciliationService.ensureBankLedgerTransactionsForAccount(companyId, bankLedgerId);
+
+    const start = startDate ? parseImportDate(startDate) : null;
+    const end = endDate ? parseImportDate(endDate) : null;
+    if (startDate && !start) {
+      throw new AppError("Invalid startDate", 400);
+    }
+    if (endDate && !end) {
+      throw new AppError("Invalid endDate", 400);
+    }
+    if (end) {
+      end.setHours(23, 59, 59, 999);
+    }
+
+    const dateFilter = {};
+    if (start) dateFilter.$gte = start;
+    if (end) dateFilter.$lte = end;
+    const hasDateFilter = Object.keys(dateFilter).length > 0;
+
+    const bankTransactionQuery = {
+      companyId,
+      bankLedgerId,
+      ...(hasDateFilter ? { date: dateFilter } : {}),
+    };
+
+    const ledgerTransactionQuery = {
+      companyId,
+      bankLedgerId,
+      ...(hasDateFilter ? { date: dateFilter } : {}),
+    };
+
+    const [bankTransactions, ledgerTransactions, allocations] = await Promise.all([
+      BankTransaction.find(bankTransactionQuery).sort({ date: 1, createdAt: 1 }).lean(),
+      BankLedgerTransaction.find(ledgerTransactionQuery)
+        .populate({
+          path: "journalId",
+          select: "number voucherType date referenceNumber externalDocNo narration status approvalStatus",
+        })
+        .sort({ date: 1, createdAt: 1 })
+        .lean(),
+      Allocation.find({ companyId }).sort({ matchedAt: 1, createdAt: 1 }).lean(),
+    ]);
+
+    const bankTransactionIds = new Set(bankTransactions.map((item) => String(item._id)));
+    const ledgerTransactionIds = new Set(ledgerTransactions.map((item) => String(item._id)));
+
+    const filteredAllocations = allocations.filter((item) => {
+      const bankMatch = item.bankTransactionId && bankTransactionIds.has(String(item.bankTransactionId));
+      const ledgerMatch =
+        item.bankLedgerTransactionId && ledgerTransactionIds.has(String(item.bankLedgerTransactionId));
+      return bankMatch || ledgerMatch;
+    });
+
+    const journalIds = [
+      ...new Set(
+        ledgerTransactions
+          .map((item) => item.journalId?._id || item.journalId)
+          .filter(Boolean)
+          .map((item) => String(item))
+      ),
+    ];
+    const journals = journalIds.length
+      ? await Journal.find({ _id: { $in: journalIds } })
+          .select("number voucherType date referenceNumber externalDocNo narration status approvalStatus")
+          .lean()
+      : [];
+    const journalMap = new Map(journals.map((item) => [String(item._id), item]));
+
+    const allocationsByBankTransactionId = new Map();
+    const allocationsByLedgerTransactionId = new Map();
+    filteredAllocations.forEach((item) => {
+      if (item.bankTransactionId) {
+        const key = String(item.bankTransactionId);
+        if (!allocationsByBankTransactionId.has(key)) allocationsByBankTransactionId.set(key, []);
+        allocationsByBankTransactionId.get(key).push(item);
+      }
+      if (item.bankLedgerTransactionId) {
+        const key = String(item.bankLedgerTransactionId);
+        if (!allocationsByLedgerTransactionId.has(key)) allocationsByLedgerTransactionId.set(key, []);
+        allocationsByLedgerTransactionId.get(key).push(item);
+      }
+    });
+
+    const monthlyMap = new Map();
+    const getBucket = (monthKey) => {
+      if (!monthlyMap.has(monthKey)) {
+        monthlyMap.set(monthKey, createMonthlySummaryBucket(monthKey));
+      }
+      return monthlyMap.get(monthKey);
+    };
+
+    const classifiedBankTransactions = bankTransactions.map((transaction) => {
+      const allocationsForTransaction = allocationsByBankTransactionId.get(String(transaction._id)) || [];
+      const allocatedAmount = getAllocatedAmount(allocationsForTransaction);
+      const totalAmount = getAbsoluteAmount(transaction.amount);
+      const unallocatedAmount = Math.max(0, totalAmount - allocatedAmount);
+      const classification = getReconciliationStatus(totalAmount, allocatedAmount);
+      const month = getMonthKey(transaction.date || transaction.transactionDate);
+
+      const bucket = getBucket(month);
+      bucket.bankTransactions.count += 1;
+      bucket.bankTransactions.totalAmount += totalAmount;
+      bucket.bankTransactions.allocatedAmount += allocatedAmount;
+      bucket.bankTransactions.unallocatedAmount += unallocatedAmount;
+
+      const statusKey = classification.toLowerCase();
+      bucket.bankTransactions[statusKey].count += 1;
+      bucket.bankTransactions[statusKey].amount += totalAmount;
+
+      return {
+        _id: String(transaction._id),
+        date: transaction.date || transaction.transactionDate,
+        valueDate: transaction.valueDate || null,
+        month,
+        referenceNo: transaction.referenceNo || transaction.reference || "",
+        description: transaction.description || "",
+        type: transaction.type || "",
+        amount: totalAmount,
+        allocatedAmount,
+        unallocatedAmount,
+        classification,
+        ledgerId: transaction.bankLedgerId ? String(transaction.bankLedgerId) : null,
+        allocationIds: allocationsForTransaction.map((item) => String(item._id)),
+      };
+    });
+
+    const classifiedJournalEntries = ledgerTransactions.map((transaction) => {
+      const allocationsForTransaction = allocationsByLedgerTransactionId.get(String(transaction._id)) || [];
+      const allocatedAmount = getAllocatedAmount(allocationsForTransaction);
+      const totalAmount = getAbsoluteAmount(transaction.amount);
+      const unallocatedAmount = Math.max(0, totalAmount - allocatedAmount);
+      const classification = getReconciliationStatus(totalAmount, allocatedAmount);
+      const journal = transaction.journalId?._id
+        ? transaction.journalId
+        : journalMap.get(String(transaction.journalId)) || null;
+      const month = getMonthKey(transaction.date || journal?.date);
+
+      const bucket = getBucket(month);
+      bucket.journalEntries.count += 1;
+      bucket.journalEntries.totalAmount += totalAmount;
+      bucket.journalEntries.allocatedAmount += allocatedAmount;
+      bucket.journalEntries.unallocatedAmount += unallocatedAmount;
+
+      const statusKey = classification.toLowerCase();
+      bucket.journalEntries[statusKey].count += 1;
+      bucket.journalEntries[statusKey].amount += totalAmount;
+
+      return {
+        _id: String(transaction._id),
+        journalId: journal?._id ? String(journal._id) : transaction.journalId ? String(transaction.journalId) : null,
+        journalLineId: transaction.journalLineId ? String(transaction.journalLineId) : null,
+        date: transaction.date || journal?.date || null,
+        month,
+        journalNumber: journal?.number || "",
+        voucherType: journal?.voucherType || "",
+        referenceNo:
+          transaction.referenceNo || journal?.referenceNumber || journal?.externalDocNo || "",
+        narration: transaction.narration || journal?.narration || "",
+        transactionType: transaction.transactionType || "",
+        amount: totalAmount,
+        allocatedAmount,
+        unallocatedAmount,
+        classification,
+        allocationIds: allocationsForTransaction.map((item) => String(item._id)),
+      };
+    });
+
+    const normalizedAllocations = filteredAllocations.map((item) => {
+      const amount = getAbsoluteAmount(item.allocatedAmount);
+      const linkedBankTransaction = item.bankTransactionId
+        ? bankTransactions.find((tx) => String(tx._id) === String(item.bankTransactionId))
+        : null;
+      const linkedLedgerTransaction = item.bankLedgerTransactionId
+        ? ledgerTransactions.find((tx) => String(tx._id) === String(item.bankLedgerTransactionId))
+        : null;
+      const month = getMonthKey(
+        item.matchedAt ||
+          linkedBankTransaction?.date ||
+          linkedBankTransaction?.transactionDate ||
+          linkedLedgerTransaction?.date
+      );
+
+      const bucket = getBucket(month);
+      bucket.allocations.count += 1;
+      bucket.allocations.totalAmount += amount;
+
+      return {
+        _id: String(item._id),
+        month,
+        matchedAt: item.matchedAt || item.createdAt || null,
+        bankTransactionId: item.bankTransactionId ? String(item.bankTransactionId) : null,
+        bankLedgerTransactionId: item.bankLedgerTransactionId ? String(item.bankLedgerTransactionId) : null,
+        journalId: item.journalId ? String(item.journalId) : null,
+        paymentId: item.paymentId ? String(item.paymentId) : null,
+        allocatedAmount: amount,
+        matchType: item.matchType || "MANUAL",
+        note: item.note || "",
+        reasons: Array.isArray(item.reasons) ? item.reasons : [],
+      };
+    });
+
+    const months = Array.from(monthlyMap.values()).sort((left, right) => left.month.localeCompare(right.month));
+
+    const reportSummary = months.reduce(
+      (summary, month) => {
+        summary.bankTransactions.count += month.bankTransactions.count;
+        summary.bankTransactions.totalAmount += month.bankTransactions.totalAmount;
+        summary.bankTransactions.allocatedAmount += month.bankTransactions.allocatedAmount;
+        summary.bankTransactions.unallocatedAmount += month.bankTransactions.unallocatedAmount;
+        summary.bankTransactions.matched.count += month.bankTransactions.matched.count;
+        summary.bankTransactions.matched.amount += month.bankTransactions.matched.amount;
+        summary.bankTransactions.partial.count += month.bankTransactions.partial.count;
+        summary.bankTransactions.partial.amount += month.bankTransactions.partial.amount;
+        summary.bankTransactions.unmatched.count += month.bankTransactions.unmatched.count;
+        summary.bankTransactions.unmatched.amount += month.bankTransactions.unmatched.amount;
+
+        summary.journalEntries.count += month.journalEntries.count;
+        summary.journalEntries.totalAmount += month.journalEntries.totalAmount;
+        summary.journalEntries.allocatedAmount += month.journalEntries.allocatedAmount;
+        summary.journalEntries.unallocatedAmount += month.journalEntries.unallocatedAmount;
+        summary.journalEntries.matched.count += month.journalEntries.matched.count;
+        summary.journalEntries.matched.amount += month.journalEntries.matched.amount;
+        summary.journalEntries.partial.count += month.journalEntries.partial.count;
+        summary.journalEntries.partial.amount += month.journalEntries.partial.amount;
+        summary.journalEntries.unmatched.count += month.journalEntries.unmatched.count;
+        summary.journalEntries.unmatched.amount += month.journalEntries.unmatched.amount;
+
+        summary.allocations.count += month.allocations.count;
+        summary.allocations.totalAmount += month.allocations.totalAmount;
+
+        return summary;
+      },
+      {
+        bankTransactions: {
+          count: 0,
+          totalAmount: 0,
+          allocatedAmount: 0,
+          unallocatedAmount: 0,
+          matched: { count: 0, amount: 0 },
+          partial: { count: 0, amount: 0 },
+          unmatched: { count: 0, amount: 0 },
+        },
+        journalEntries: {
+          count: 0,
+          totalAmount: 0,
+          allocatedAmount: 0,
+          unallocatedAmount: 0,
+          matched: { count: 0, amount: 0 },
+          partial: { count: 0, amount: 0 },
+          unmatched: { count: 0, amount: 0 },
+        },
+        allocations: {
+          count: 0,
+          totalAmount: 0,
+        },
+      }
+    );
+
+    new ApiResponse({
+      statusCode: 200,
+      data: {
+        bankLedger: {
+          _id: String(bankLedger._id),
+          code: bankLedger.code,
+          name: bankLedger.name,
+          groupName: bankLedger.groupName,
+        },
+        filters: {
+          companyId,
+          bankLedgerId,
+          startDate: start ? start.toISOString() : null,
+          endDate: end ? end.toISOString() : null,
+        },
+        summary: reportSummary,
+        months,
+        details: {
+          bankTransactions: classifiedBankTransactions,
+          journalEntries: classifiedJournalEntries,
+          allocations: normalizedAllocations,
+        },
+      },
+      message: "Monthly reconciliation report retrieved",
+    }).send(res);
   } catch (error) {
     return handleControllerError(error, res);
   }
