@@ -10,6 +10,7 @@ import {
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeEntityPayload } from "../utils/entityMasterData.js";
 
 // Generate clientCode
 const generateClientCode = () => {
@@ -19,7 +20,7 @@ const generateClientCode = () => {
 export const createClientController = async (req, res, next) => {
   try {
     const { companyId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "client");
     const userId = req.user?._id;
 
     if (!data.clientName) {
@@ -169,7 +170,7 @@ export const clientStatusController = async (req, res, next) => {
 export const updateClientController = async (req, res, next) => {
   try {
     const { clientId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "client");
     const userId = req.user?._id;
 
     const oldClient = await findClientByIdRepo(clientId, {}, false);
@@ -250,6 +251,9 @@ export const getClientsPaginatedController = async (req, res, next) => {
       companyId,
       page,
       limit,
+      search: req.query.search,
+      status: req.query.status,
+      country: req.query.country,
     });
 
     return new ApiResponse({

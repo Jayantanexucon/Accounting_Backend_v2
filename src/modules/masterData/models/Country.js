@@ -24,6 +24,26 @@ const CountrySchema = new mongoose.Schema(
       type: Schema.Types.ObjectId,
       ref: "Currency",
     },
+    countryType: {
+      type: String,
+      enum: ["GST", "VAT", "SALES_TAX", "CORPORATE_TAX", "NONE", "OTHER"],
+      default: "OTHER",
+      trim: true,
+    },
+    taxTypes: {
+      type: [String],
+      default: [],
+    },
+    postalCodeLabel: {
+      type: String,
+      trim: true,
+      default: "Postal Code",
+    },
+    postalCodeRegex: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     isActive: {
       type: Boolean,
       default: true,

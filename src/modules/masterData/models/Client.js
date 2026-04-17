@@ -3,6 +3,12 @@ import { getDatabase } from "../../../config/databases.js";
 
 const addressSchema = new mongoose.Schema(
   {
+    type: {
+      type: String,
+      enum: ["DEFAULT", "SHIP_TO", "BILL_TO", "BRANCH", "OTHER"],
+      default: "DEFAULT",
+    },
+    label: { type: String, trim: true, default: "" },
     line1: { type: String, trim: true, default: "" },
     line2: { type: String, trim: true, default: "" },
     city: { type: String, trim: true, default: "" },
@@ -11,6 +17,21 @@ const addressSchema = new mongoose.Schema(
     pinCode: { type: String, trim: true, default: "" },
     stateCode: { type: String, trim: true, default: "" },
     gstStateCode: { type: String, trim: true, default: "" },
+    taxType: { type: String, trim: true, default: "" },
+    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
+    countryId: { type: mongoose.Schema.Types.ObjectId, ref: "Country", default: null },
+    stateId: { type: mongoose.Schema.Types.ObjectId, ref: "State", default: null },
+    isDefault: { type: Boolean, default: false },
+    isShipTo: { type: Boolean, default: false },
+  },
+  { _id: true }
+);
+
+const taxDetailSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, trim: true, default: "" },
+    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
+    label: { type: String, trim: true, default: "" },
   },
   { _id: false }
 );
@@ -87,10 +108,10 @@ const clientSchema = new mongoose.Schema(
     stateCode: { type: String, trim: true, default: "" },
     gstStateCode: { type: String, trim: true, default: "" },  // ← was missing
 
-    // ── Billing & Shipping Addresses ──────────────────────────────────────────
-    billingAddress: { type: addressSchema, default: () => ({}) },
-    shippingAddress: { type: addressSchema, default: () => ({}) },
     sameAsBilling: { type: Boolean, default: true },
+    addresses: { type: [addressSchema], default: [] },
+    defaultAddress: { type: addressSchema, default: () => ({}) },
+    additionalAddresses: { type: [addressSchema], default: [] },
 
     // ── GST / Place of Supply (India) ─────────────────────────────────────────
     placeOfSupply: { type: String, trim: true, default: "" },
@@ -180,6 +201,10 @@ const clientSchema = new mongoose.Schema(
       uppercase: true,
       default: "",
     },
+    taxDetails: {
+      type: [taxDetailSchema],
+      default: [],
+    },
 
     // ── TDS Configuration (India) ─────────────────────────────────────────────
     tdsApplicable: { type: Boolean, default: false },
@@ -194,6 +219,8 @@ const clientSchema = new mongoose.Schema(
       default: "",
     },
     currency: { type: String, trim: true, default: "INR" },  // ISO 4217
+    currencySymbol: { type: String, trim: true, default: "₹" },
+    currencyName: { type: String, trim: true, default: "Indian Rupee" },
     creditLimit: { type: Number, default: 0, min: 0 },          // 0 = unlimited
     openingBalance: { type: Number, default: 0 },                  // +ve receivable / -ve payable
     openingBalanceDate: { type: Date, default: null },
