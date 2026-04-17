@@ -2,20 +2,57 @@ import { createCountryRepo, findCountryByIdRepo, getAllCountriesRepo, updateCoun
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeCountryPayload } from "../utils/entityMasterData.js";
+import { createCurrencyRepo, findCurrencyByCodeRepo } from "../repos/currencyRepo.js";
+
+const resolveCurrencyReference = async (payload, userId) => {
+  if (payload.currency && typeof payload.currency !== "object") {
+    return payload.currency;
+  }
+
+  const currencyPayload = payload.currencyDetails || payload.currency;
+  if (!currencyPayload || typeof currencyPayload !== "object") {
+    return null;
+  }
+
+  const currencyName = currencyPayload.currencyName?.trim();
+  const currencyCode = currencyPayload.currencyCode?.trim()?.toUpperCase();
+  const currencySymbol = currencyPayload.currencySymbol?.trim() || "";
+
+  if (!currencyName || !currencyCode) {
+    throw new AppError("Currency name and currency code are required", 400, "resolveCurrencyReference");
+  }
+
+  const existingCurrency = await findCurrencyByCodeRepo(currencyCode);
+  if (existingCurrency) {
+    return existingCurrency._id;
+  }
+
+  const createdCurrency = await createCurrencyRepo({
+    currencyName,
+    currencyCode,
+    currencySymbol,
+    createdBy: userId,
+    updatedBy: userId,
+  });
+
+  return createdCurrency._id;
+};
 
 export const createCountryController = async (req, res, next) => {
   try {
-    const { countryName, countryCode, dialCode, currency } = req.body;
+    const normalizedPayload = normalizeCountryPayload(req.body);
+    const { countryName, countryCode } = normalizedPayload;
     const userId = req.user?._id;
 
     if (!countryName || !countryCode) {
       throw new AppError("Country name and code are required", 400, "createCountryController");
     }
 
+    const currency = await resolveCurrencyReference(normalizedPayload, userId);
+
     const country = await createCountryRepo({
-      countryName,
-      countryCode,
-      dialCode,
+      ...normalizedPayload,
       currency,
       createdBy: userId,
       updatedBy: userId,
@@ -86,7 +123,7 @@ export const getCountryByIdController = async (req, res, next) => {
 export const updateCountryController = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const updateData = req.body;
+    const updateData = normalizeCountryPayload(req.body);
     const userId = req.user?._id;
 
     const oldCountry = await findCountryByIdRepo(countryId);
@@ -94,8 +131,11 @@ export const updateCountryController = async (req, res, next) => {
       throw new AppError("Country not found", 404, "updateCountryController");
     }
 
+    const currency = await resolveCurrencyReference(updateData, userId);
+
     const country = await updateCountryRepo(countryId, {
       ...updateData,
+      ...(currency ? { currency } : {}),
       updatedBy: userId,
     });
 
