@@ -380,9 +380,9 @@ export const getCompanyForUserById = async (req, res, next) => {
 
     const hasAccess = user.permissions?.some((perm) => {
       const permCompanyId =
-        typeof perm.companyId === "object"
-          ? perm.companyId?._id?.toString()
-          : perm.companyId?.toString();
+        typeof perm.company === "object"
+          ? perm.company?._id?.toString()
+          : perm.company?.toString();
 
       return permCompanyId === companyId?.toString();
     });

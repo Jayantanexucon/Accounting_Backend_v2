@@ -55,7 +55,8 @@ export const createPurchaseOrder = async (req, res, next) => {
       items.forEach((item) => {
         totalTaxableValue += Number(item.taxableValue) || 0;
         totalGSTAmount += Number(item.gstAmount) || 0;
-        totalAmount += Number(item.totalAmount) || 0;
+        // Use whichever is provided: totalAmount (from backend) or total (from frontend)
+        totalAmount += Number(item.totalAmount || item.total) || 0;
       });
     }
 
@@ -103,10 +104,13 @@ export const createPurchaseOrder = async (req, res, next) => {
         hsnId: item.hsnId ? String(item.hsnId) : undefined,
         hsnSac: item.hsnSac || "",
         unit: item.unit || "each",   // Default to "each" if not provided
+        quantity: Number(item.quantity) || 0,
+        rate: Number(item.rate) || 0,
         gstRate: Number(item.gstRate) || 0,
         gstAmount: Number(item.gstAmount) || 0,
         taxableValue: Number(item.taxableValue) || 0,
-        totalAmount: Number(item.totalAmount) || 0,
+        // Calculate totalAmount: use provided totalAmount, or calc from total/taxableValue+gstAmount
+        totalAmount: Number(item.totalAmount) || Number(item.total) || (Number(item.taxableValue) + Number(item.gstAmount)) || 0,
       })) : [],
 
       milestones: normalizedMilestones,
