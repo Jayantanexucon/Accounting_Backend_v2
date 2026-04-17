@@ -142,7 +142,7 @@ const purchaseOrderSchema = new mongoose.Schema(
     paymentTerms: {
       type: String,
       enum: [
-        "milestone", "monthly", "hourly",
+        "milestone", "monthly", "hourly","weekly",
         "advance", "immediate",
         "net-15", "net-30", "net-45", "net-60", "net-90",
         "on_milestone", "on_delivery", "cod",

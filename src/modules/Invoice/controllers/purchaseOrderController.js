@@ -11,6 +11,7 @@ import {
   getPOsByStatusRepo,
   getPOsWithInvoiceProgressRepo,
 } from "../repos/purchaseOrderRepo.js";
+import { getInvoicesByPORepo } from "../repos/invoiceRepo.js";
 
 const generatePONumber = async (companyId) => {
   const timestamp = Date.now();
@@ -195,6 +196,10 @@ export const getPurchaseOrderById = async (req, res, next) => {
     }
 
     const po = await getPurchaseOrderByIdRepo(id);
+
+    // Fetch linked invoices and attach to PO
+    const linkedInvoices = await getInvoicesByPORepo(id);
+    po.linkedInvoices = linkedInvoices;
 
     new ApiResponse({
       statusCode: 200,
