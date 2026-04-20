@@ -102,18 +102,24 @@ export const registerModuleRoutes = () => {
   } catch (error) {
     console.error("⚠️  Failed to register module routes:", error.message);
   }
-}
+};
 
-// 404 Handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route not found",
+/**
+ * Register error handlers (must be called AFTER all routes are registered)
+ * This is called in server.js after registerModuleRoutes()
+ */
+export const registerErrorHandlers = () => {
+  // 404 Handler - catches routes that don't exist
+  app.use((req, res) => {
+    res.status(404).json({
+      success: false,
+      message: "Route not found",
+    });
   });
-});
 
-// Error Handler (must be last)
-app.use(errorHandler);
+  // Error Handler (must be last)
+  app.use(errorHandler);
+};
 
 export default app;
  
