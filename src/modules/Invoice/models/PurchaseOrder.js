@@ -24,8 +24,7 @@ const poLineItemSchema = new mongoose.Schema(
     totalAmount: { type: Number, required: true, min: 0 },
     invoicedQuantity: { type: Number, default: 0, min: 0 },
     invoicedAmount: { type: Number, default: 0, min: 0 },
-  },
-  { _id: false }
+  }
 );
 
 // ─── Address Schema ──────────────────────────────────────────────
@@ -64,8 +63,7 @@ const poMilestoneSchema = new mongoose.Schema(
       default: "pending",
     },
     remarks: { type: String },
-  },
-  { _id: false }
+  }
 );
 
 // ─── Resource Schema ─────────────────────────────────────────────
@@ -88,8 +86,7 @@ const resourceSchema = new mongoose.Schema(
       enum: ["Active", "On Leave", "Inactive"],
       default: "Active",
     },
-  },
-  { _id: false }
+  }
 );
 
 // ─── Attendance Schema ───────────────────────────────────────────
@@ -102,8 +99,7 @@ const attendanceRecordSchema = new mongoose.Schema(
     approved: { type: Boolean, default: false },
     approvedBy: { type: String },
     approvalDate: { type: Date },
-  },
-  { _id: false }
+  }
 );
 
 // ─── Main Purchase Order Schema ──────────────────────────────────
@@ -142,8 +138,8 @@ const purchaseOrderSchema = new mongoose.Schema(
     paymentTerms: {
       type: String,
       enum: [
-        "milestone", "monthly", "hourly",
-        "advance", "immediate","weekly",
+        "milestone", "monthly", "hourly","weekly",
+        "advance", "immediate",
         "net-15", "net-30", "net-45", "net-60", "net-90",
         "on_milestone", "on_delivery", "cod",
       ],
