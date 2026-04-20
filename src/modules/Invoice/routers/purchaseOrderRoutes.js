@@ -10,6 +10,8 @@ import {
   getPurchaseOrderByNumber,
   getPOStats,
   getPOsByStatus,
+  downloadWordPurchaseOrder,
+  downloadPdfPurchaseOrder,
 } from "../controllers/purchaseOrderController.js";
 
 const router = express.Router();
@@ -40,5 +42,9 @@ router.put("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action
 
 // Delete PO
 router.delete("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "DELETE" }), deletePurchaseOrder);
+
+// Download routes
+router.get("/:id/download/word", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), downloadWordPurchaseOrder);
+router.get("/:id/download/pdf", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), downloadPdfPurchaseOrder);
 
 export default router;
