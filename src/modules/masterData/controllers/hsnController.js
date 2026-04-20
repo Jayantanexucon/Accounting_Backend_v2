@@ -63,25 +63,8 @@ export const createHSNController = async (req, res, next) => {
 
 export const getAllHSNController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    if (!companyId) {
-      throw new AppError("Company ID is required", 400, "getAllHSNController");
-      
-    }
-
-    console.log("===================company==================");
-    
-
-    console.log(companyId);
-    
-
-    const list = await getAllHSNRepo(companyId);
-
-    console.log("===================hsn list==================");
-
-    console.log(list);
-    
+    // Always return all HSN codes (global master data) - companyId filter removed
+    const list = await getAllHSNRepo();
 
     return res.status(200).json(
       new ApiResponse({
@@ -97,13 +80,11 @@ export const getAllHSNController = async (req, res, next) => {
 
 export const getHSNController = async (req, res, next) => {
   try {
-    const { companyId, hsnId } = req.params;
+    const { hsnId } = req.params;
 
-    const hsn = await findHSNByIdRepo(hsnId, companyId);
-    console.log("===============hsn list==============");
-    console.log(hsn);
-    
-    
+    // Search all HSN codes (global master data) - no companyId filter
+    const hsn = await findHSNByIdRepo(hsnId);
+
     if (!hsn) {
       throw new AppError("HSN not found", 404, "getHSNController");
     }

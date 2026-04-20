@@ -66,8 +66,8 @@ export const createClientController = async (req, res, next) => {
 
 export const getClientsController = async (req, res, next) => {
   try {
-    const companyId = req.query.companyId || req.params.companyId;
-    const clients = await findClientsRepo({ companyId }, true);
+    // Always return all clients (global master data) - companyId filter removed
+    const clients = await findClientsRepo({}, true);
 
     return new ApiResponse({
       message: "Clients fetched successfully",
@@ -99,8 +99,8 @@ export const getClientByIdController = async (req, res, next) => {
 
 export const getPendingClientRequestsController = async (req, res, next) => {
   try {
-    const companyId = req.query.companyId || req.params.companyId;
-    const clients = await findClientsRepo({ companyId }, true);
+    // Always return all pending clients (global master data) - companyId filter removed
+    const clients = await findClientsRepo({}, true);
 
     const pendingClients = clients?.ref?.filter((r) => r.status === "Pending") || [];
 
@@ -243,12 +243,11 @@ export const deleteClientController = async (req, res, next) => {
 
 export const getClientsPaginatedController = async (req, res, next) => {
   try {
-    const companyId  = req.query.companyId;
+    // Always return all clients (global master data) - companyId filter removed
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 
     const result = await getPaginatedClientsRepo({
-      companyId,
       page,
       limit,
       search: req.query.search,

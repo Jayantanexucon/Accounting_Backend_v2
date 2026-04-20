@@ -31,9 +31,9 @@ router.get(
   getClientsPaginatedController
 );
 
-// GET /api/client/pending/:companyId - Get pending client requests
+// GET /api/client/pending - Get all pending client requests (global master data)
 router.get(
-  "/pending/:companyId",
+  "/pending",
   accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getPendingClientRequestsController
 );

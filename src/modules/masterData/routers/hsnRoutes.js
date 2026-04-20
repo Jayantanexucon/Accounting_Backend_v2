@@ -29,16 +29,16 @@ router.post(
   bulkCreateHSNController
 );
 
-// GET /api/hsn/:companyId - Get all HSN for company
+// GET /api/hsn - Get all HSN (optional companyId via query param)
 router.get(
-  "/:companyId",
+  "/",
   accessControlMiddleware({ entityKey: "HSN", action: "VIEW" }),
   getAllHSNController
 );
 
-// GET /api/hsn/:companyId/:id - Get HSN by ID
+// GET /api/hsn/:id - Get HSN by ID (optional companyId via query param)
 router.get(
-  "/:companyId/:id",
+  "/:hsnId",
   accessControlMiddleware({ entityKey: "HSN", action: "VIEW" }),
   getHSNController
 );

@@ -2,6 +2,12 @@ import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
 import {
+  generateWordDocument,
+  generatePdfFromWord,
+  formatDate,
+  sendDocumentResponse,
+} from "../../../utils/documentGenerator.js";
+import {
   createPurchaseOrderRepo,
   getPurchaseOrderByIdRepo,
   getPurchaseOrdersRepo,
@@ -361,6 +367,129 @@ export const getPOsByStatus = async (req, res, next) => {
       data: pos,
       message: `Purchase Orders with status '${status}' retrieved successfully`,
     }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================
+// Download Functions
+// ============================================
+
+/**
+ * Prepare purchase order data for template
+ */
+const preparePurchaseOrderData = (purchaseOrder) => {
+  const data = {
+    // Header
+    PurchaseOrderNo: purchaseOrder.poNumber,
+    poDate: formatDate(purchaseOrder.poDate),
+    DueDate: formatDate(purchaseOrder.deliveryDate),
+    purchaseorderreference: purchaseOrder.poreferencevalue || "",
+    referenceDate: formatDate(purchaseOrder.referenceDate),
+    Currency: purchaseOrder.currency || "INR",
+    AmountDue: purchaseOrder.totalAmount?.toFixed(2) || "0.00",
+    PaymentMode: purchaseOrder.paymentTerms || "",
+
+    // Bill To / Ship To
+    BillToClientName: purchaseOrder.vendor?.name || "",
+    BillToAddress: purchaseOrder.vendor?.address || "",
+    BillToStateCode: purchaseOrder.vendor?.stateCode || "",
+    BillToGSTIN: purchaseOrder.vendor?.GSTIN || "",
+    ShipToClientName: purchaseOrder.deliverTo?.name || "",
+    ShipToAddress: purchaseOrder.deliverTo?.address || "",
+    ShipToStateCode: purchaseOrder.deliverTo?.stateCode || "",
+    ShipToGSTIN: purchaseOrder.deliverTo?.GSTIN || "",
+
+    // Totals
+    TotalTaxableValue: purchaseOrder.totalTaxableValue?.toFixed(2) || "0.00",
+    ValueInFigure: purchaseOrder.valueInWords || "",
+    CGST: purchaseOrder.totalCGSTAmount?.toFixed(2) || "0.00",
+    SGST: purchaseOrder.totalSGSTAmount?.toFixed(2) || "0.00",
+    IGST: purchaseOrder.totalIGSTAmount?.toFixed(2) || "0.00",
+
+    // Items array for looping
+    items: (purchaseOrder.items || []).map((item, idx) => ({
+      index: idx + 1,
+      description: item.description || "",
+      hsnSac: item.hsnSac || "",
+      quantity: item.quantity,
+      rate: (item.rate || 0).toFixed(2),
+      taxableValue: (item.taxableValue || 0).toFixed(2),
+      gstRate: item.gstRate || 0,
+      gstAmount: (item.gstAmount || 0).toFixed(2),
+      total: (item.totalAmount || item.total || 0).toFixed(2),
+    })),
+  };
+  return data;
+};
+
+/**
+ * Download Purchase Order as Word document
+ */
+export const downloadWordPurchaseOrder = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Purchase Order ID is required", 400, "downloadWordPurchaseOrder");
+    }
+
+    const purchaseOrder = await getPurchaseOrderByIdRepo(id);
+
+    if (!purchaseOrder) {
+      throw new AppError("Purchase Order not found", 404, "downloadWordPurchaseOrder");
+    }
+
+    const templateName = purchaseOrder.withSignature
+      ? "PurchaseOrder-Template With Signature.docx"
+      : "PurchaseOrder-Template Without Signature.docx";
+
+    const templateData = preparePurchaseOrderData(purchaseOrder);
+    const buffer = await generateWordDocument(templateName, templateData);
+
+    sendDocumentResponse(
+      res,
+      buffer,
+      `PurchaseOrder_${purchaseOrder.poNumber}.docx`,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download Purchase Order as PDF document
+ */
+export const downloadPdfPurchaseOrder = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Purchase Order ID is required", 400, "downloadPdfPurchaseOrder");
+    }
+
+    const purchaseOrder = await getPurchaseOrderByIdRepo(id);
+
+    if (!purchaseOrder) {
+      throw new AppError("Purchase Order not found", 404, "downloadPdfPurchaseOrder");
+    }
+
+    const templateName = purchaseOrder.withSignature
+      ? "PurchaseOrder-Template With Signature.docx"
+      : "PurchaseOrder-Template Without Signature.docx";
+
+    const templateData = preparePurchaseOrderData(purchaseOrder);
+    const wordBuffer = await generateWordDocument(templateName, templateData);
+    const pdfBuffer = await generatePdfFromWord(wordBuffer);
+
+    sendDocumentResponse(
+      res,
+      pdfBuffer,
+      `PurchaseOrder_${purchaseOrder.poNumber}.pdf`,
+      "application/pdf"
+    );
   } catch (error) {
     next(error);
   }
