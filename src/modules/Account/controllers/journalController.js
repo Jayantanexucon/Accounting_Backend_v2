@@ -11,6 +11,9 @@ import {
   getJournalsByApprovalStatusRepo,
 } from "../repos/journalRepo.js";
 import { createMultipleJournalLinesRepo, deleteJournalLinesByJournalRepo } from "../repos/journalLineRepo.js";
+import { getBankLedgerTransactionModel } from "../models/BankLedgerTransaction.js";
+import { getBankReconciliationAllocationModel } from "../models/BankReconciliationAllocation.js";
+import { BankReconciliationService } from "../services/bankReconciliationService.js";
 import {
   createJournalApprovalRequestRepo,
   findPendingApprovalForJournalRepo,
@@ -142,12 +145,40 @@ const applyJournalUpdate = async (id, payload, userId) => {
   if (payload.partyName !== undefined) updateData.partyName = payload.partyName;
 
   if (payload.lines !== undefined) {
+    const BankLedgerTransaction = await getBankLedgerTransactionModel();
+    const Allocation = await getBankReconciliationAllocationModel();
     const normalizedLines = normalizeJournalLines(payload.lines);
     const enrichedLines = await enrichJournalLines(normalizedLines, companyId);
     const { totalDebit, totalCredit } = validateJournalLines(enrichedLines);
 
     updateData.totalDebit = totalDebit;
     updateData.totalCredit = totalCredit;
+
+    const existingBankLedgerTransactions = await BankLedgerTransaction.find({
+      companyId,
+      journalId: id,
+    }).lean();
+    const existingBankLedgerTransactionIds = existingBankLedgerTransactions.map((item) => item._id);
+    const relatedAllocations = existingBankLedgerTransactionIds.length
+      ? await Allocation.find({
+          companyId,
+          bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
+        }).lean()
+      : [];
+    const affectedBankTransactionIds = [
+      ...new Set(relatedAllocations.map((item) => String(item.bankTransactionId)).filter(Boolean)),
+    ];
+
+    if (existingBankLedgerTransactionIds.length > 0) {
+      await Allocation.deleteMany({
+        companyId,
+        bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
+      });
+      await BankLedgerTransaction.deleteMany({
+        companyId,
+        journalId: id,
+      });
+    }
 
     await deleteJournalLinesByJournalRepo(id);
     await createMultipleJournalLinesRepo(
@@ -165,6 +196,10 @@ const applyJournalUpdate = async (id, payload, userId) => {
         lineNumber: line.lineNumber,
       }))
     );
+
+    for (const bankTransactionId of affectedBankTransactionIds) {
+      await BankReconciliationService.syncAllocationStatus(bankTransactionId, null);
+    }
   }
 
   await updateJournalRepo(id, updateData);

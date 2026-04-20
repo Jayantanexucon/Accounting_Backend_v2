@@ -38,6 +38,10 @@ const journalLineSchema = new mongoose.Schema(
       type: String,
     },
     lineNumber: Number,
+    isReconciled: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

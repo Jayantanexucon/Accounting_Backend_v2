@@ -74,6 +74,10 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    isReconciled: {
+      type: Boolean,
+      default: false,
+    },
     updatedBy: {
       type: String,
     },
@@ -82,6 +86,29 @@ const paymentSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Auto-reconciliation hook
+paymentSchema.post("save", async function (doc) {
+  try {
+    if (doc.status === "COMPLETED" && doc.journalId) {
+      const { BankReconciliationService } = await import("../services/bankReconciliationService.js");
+      const { getBankLedgerTransactionModel } = await import("./BankLedgerTransaction.js");
+      const BankLedgerTransaction = await getBankLedgerTransactionModel();
+
+      const ledgerTransactions = await BankLedgerTransaction.find({
+        companyId: doc.companyId,
+        journalId: doc.journalId,
+        reconciliationStatus: { $ne: "MATCHED" },
+      }).lean();
+
+      for (const ledgerTx of ledgerTransactions) {
+        await BankReconciliationService.autoReconcile(ledgerTx._id);
+      }
+    }
+  } catch (error) {
+    console.error("Auto-reconciliation hook failed for Payment:", error.message);
+  }
+});
 
 paymentSchema.index({ companyId: 1, invoiceId: 1 });
 paymentSchema.index({ paymentDate: -1, status: 1 });

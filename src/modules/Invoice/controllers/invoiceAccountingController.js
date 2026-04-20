@@ -505,7 +505,7 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
   };
 };
 
-const recordPaymentForInvoice = async ({
+export const recordPaymentForInvoice = async ({
   invoiceId,
   companyId,
   amountPaid,
@@ -517,6 +517,7 @@ const recordPaymentForInvoice = async ({
   tdsRate,
   tdsSection,
   clientId,
+  bankLedgerId,
   userId,
   reqUser = {},
 }) => {
@@ -544,15 +545,29 @@ const recordPaymentForInvoice = async ({
   }
 
   const accounts = await ensureInvoiceAccounts(invoice, userId);
+  const Account = await getAccountModel();
   const paymentLedgerConfig = PAYMENT_MODE_TO_LEDGER[paymentMode] || PAYMENT_MODE_TO_LEDGER.BANK_TRANSFER;
-  const paymentLedger = await ensureLedgerAccount({
-    companyId,
-    groupData: paymentLedgerConfig.group,
-    accountName: paymentLedgerConfig.accountName,
-    searchPatterns: [paymentLedgerConfig.accountName, paymentMode?.replaceAll("_", " ") || "bank"],
-    prefix: paymentLedgerConfig.prefix,
-    userId,
-  });
+  const paymentLedger = bankLedgerId
+    ? {
+        account: await Account.findOne({
+          _id: bankLedgerId,
+          companyId: normalizeCompanyId(companyId),
+          isActive: true,
+        }),
+        autoCreated: false,
+      }
+    : await ensureLedgerAccount({
+        companyId,
+        groupData: paymentLedgerConfig.group,
+        accountName: paymentLedgerConfig.accountName,
+        searchPatterns: [paymentLedgerConfig.accountName, paymentMode?.replaceAll("_", " ") || "bank"],
+        prefix: paymentLedgerConfig.prefix,
+        userId,
+      });
+
+  if (!paymentLedger?.account) {
+    throw new AppError("Selected bank ledger not found for payment posting", 404, "recordPaymentForInvoice");
+  }
 
   const tdsLedger =
     normalizedTdsAmount > 0

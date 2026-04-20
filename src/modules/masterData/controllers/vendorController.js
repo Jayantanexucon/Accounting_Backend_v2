@@ -10,6 +10,7 @@ import {
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeEntityPayload } from "../utils/entityMasterData.js";
 
 // Generate vendorCode
 const generateVendorCode = () => {
@@ -19,7 +20,7 @@ const generateVendorCode = () => {
 export const addVendorController = async (req, res, next) => {
   try {
     const { companyId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "vendor");
     const files = req.files;
     const userId = req.user?._id;
 
@@ -104,7 +105,7 @@ export const getPaginatedVendorsController = async (req, res, next) => {
 export const updateVendorController = async (req, res, next) => {
   try {
     const { vendorId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "vendor");
     const files = req.files;
     const userId = req.user?._id;
 
