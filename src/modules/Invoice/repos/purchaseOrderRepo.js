@@ -6,8 +6,14 @@ const recalculateItemTotals = (po) => {
   if (!Array.isArray(po.items)) return po;
 
   let recalculated = false;
-  const items = po.items.map(item => {
-    // If totalAmount is 0 but we have taxableValue and gstAmount, recalculate
+  const items = po.items.map((item, index) => {
+    // ── Assign stable itemId if missing ─────────────────────────
+    if (!item.itemId && !item._id) {
+       item.itemId = `po-item-${index}`;
+       recalculated = true;
+    }
+
+    // ── Recalculate totals ──────────────────────────────────────
     if ((item.totalAmount === 0 || !item.totalAmount) && (item.taxableValue || item.gstAmount)) {
       item.totalAmount = Number(item.taxableValue || 0) + Number(item.gstAmount || 0);
       recalculated = true;
