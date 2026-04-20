@@ -6,6 +6,7 @@ dotenv.config();
 
 // Store all database connections
 let connections = {};
+let isInitialized = false;
 
 /**
  * Initialize all database connections from AVAILABLE_MODULES in .env
@@ -13,10 +14,16 @@ let connections = {};
  */
 export const initializeDatabaseConnections = async () => {
   try {
+    // ✅ Return cached connections if already initialized (prevent double init)
+    if (isInitialized) {
+      console.log("✅ Using cached database connections");
+      return connections;
+    }
+
     // Parse AVAILABLE_MODULES from environment
     let modulesConfig = {};
     const modulesEnv = process.env.AVAILABLE_MODULES;
-    console.log(modulesEnv);
+    console.log("📋 AVAILABLE_MODULES:", modulesEnv);
     
     
     if (!modulesEnv) {
@@ -53,6 +60,9 @@ export const initializeDatabaseConnections = async () => {
       }
     }
 
+    // ✅ Mark as initialized to use cache on next call
+    isInitialized = true;
+
     console.log(`\n✅ All available databases connected successfully (${Object.keys(connections).length} total)`);
     return connections;
   } catch (error) {
@@ -74,16 +84,15 @@ export const getDatabase = (moduleName) => {
 };
 
 /**
- * Get names of all connected modules
+ * Get names of all connected modules (SYNC - uses cached connections)
+ * MUST call initializeDatabaseConnections() first!
  * @returns {string[]} Array of module names
  */
-export const  getConnectedModules = async() => {
-
-  const connection1 = await initializeDatabaseConnections();
-  // console.log('===================||=================');
-  // console.log(connection1);
-  // console.log('====================||================');
-  return Object.keys(connection1);
+export const getConnectedModules = () => {
+  if (!isInitialized) {
+    throw new Error("Databases not initialized. Call await initializeDatabaseConnections() first.");
+  }
+  return Object.keys(connections);
 };
 
 /**

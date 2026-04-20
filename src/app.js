@@ -37,6 +37,19 @@ app.use(passport.initialize());
 // Initialize all database connections
 export const initializeDatabases = async () => {
   try {
+    // ✅ Validate AVAILABLE_MODULES before initializing
+    const modulesEnv = process.env.AVAILABLE_MODULES;
+    if (!modulesEnv) {
+      throw new Error("❌ AVAILABLE_MODULES is not defined in environment variables!");
+    }
+
+    // ✅ Validate JSON format
+    try {
+      JSON.parse(modulesEnv);
+    } catch (parseError) {
+      throw new Error(`❌ Invalid JSON in AVAILABLE_MODULES: ${parseError.message}\nValue: ${modulesEnv}`);
+    }
+
     // Initialize all databases from AVAILABLE_MODULES
     await initializeDatabaseConnections();
 
@@ -63,22 +76,32 @@ app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
 app.use("/api/audit-logs", auditRoutes);
 
-// Conditionally register module-specific routes
-const connectedModules = await getConnectedModules();
-console.log('====================================');
-console.log('Connected Modules:', connectedModules);
-console.log('====================================');
+/**
+ * Register module-specific routes based on connected databases
+ * This is called AFTER databases are initialized
+ */
+export const registerModuleRoutes = () => {
+  try {
+    // ✅ Now this is safe - databases are already initialized when this is called
+    const connectedModules = getConnectedModules();
+    console.log('====================================');
+    console.log('Connected Modules:', connectedModules);
+    console.log('====================================');
 
-if (connectedModules.includes("accounting")) {
-  console.log("✅ Accounting module routes registered at /api/accounting");
-  app.use("/api/accounting", accountingRoutes);
-}
+    if (connectedModules.includes("accounting")) {
+      console.log("✅ Accounting module routes registered at /api/accounting");
+      app.use("/api/accounting", accountingRoutes);
+    }
 
-if (connectedModules.includes("invoice")) {
-  console.log("✅ Invoice module routes registered at /api/invoice");
-  app.use("/api/invoices", invoiceRoutes);
-  console.log("✅ Invoice accounting routes registered at /api/invoice-accounting");
-  app.use("/api/invoice-accounting", invoiceAccountingRoutes);
+    if (connectedModules.includes("invoice")) {
+      console.log("✅ Invoice module routes registered at /api/invoice");
+      app.use("/api/invoices", invoiceRoutes);
+      console.log("✅ Invoice accounting routes registered at /api/invoice-accounting");
+      app.use("/api/invoice-accounting", invoiceAccountingRoutes);
+    }
+  } catch (error) {
+    console.error("⚠️  Failed to register module routes:", error.message);
+  }
 }
 
 // 404 Handler
