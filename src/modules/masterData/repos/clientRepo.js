@@ -104,11 +104,12 @@ export const getLastClientCodeRepo = async (companyId) => {
   }
 };
 
-export const getPaginatedClientsRepo = async ({ companyId, page, limit, search, status, country }) => {
+export const getPaginatedClientsRepo = async ({ page, limit, search, status, country }) => {
   try {
     const Client = await getClientModel();
     const skip = (page - 1) * limit;
-    const query = { companyId: String(companyId) };
+    // Always return all clients (global master data) - no companyId filter
+    const query = {};
 
     if (status === "active") {
       query.isActive = true;

@@ -61,7 +61,14 @@ router.post(
   addVendorController
 );
 
-// GET /api/vendor/:companyId - Get paginated vendors (must be last since it matches any string)
+// GET /api/vendor - Get all vendors (global master data)
+router.get(
+  "/",
+  accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),
+  getPaginatedVendorsController
+);
+
+// GET /api/vendor/:companyId - Get paginated vendors (for backward compatibility)
 router.get(
   "/:companyId",
   accessControlMiddleware({ entityKey: "VENDOR", action: "VIEW" }),

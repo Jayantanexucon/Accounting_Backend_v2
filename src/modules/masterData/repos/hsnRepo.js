@@ -11,19 +11,21 @@ export const createHSNRepo = async (data) => {
   }
 };
 
-export const findHSNByIdRepo = async (id, companyId) => {
+export const findHSNByIdRepo = async (id) => {
   try {
     const HSN = await getHSNModel();
-    return await HSN.findOne({ _id: id, companyId });
+    // Search all HSN codes (global master data) - no companyId filter
+    return await HSN.findOne({ _id: id });
   } catch (error) {
     throw new AppError(error.message, 500, "findHSNByIdRepo");
   }
 };
 
-export const getAllHSNRepo = async (companyId) => {
+export const getAllHSNRepo = async () => {
   try {
     const HSN = await getHSNModel();
-    return await HSN.find({ companyId }).sort({ createdAt: -1 });
+    // Always return all HSN codes (global master data) - no companyId filter
+    return await HSN.find({}).sort({ createdAt: -1 });
   } catch (error) {
     throw new AppError(error.message, 500, "getAllHSNRepo");
   }
