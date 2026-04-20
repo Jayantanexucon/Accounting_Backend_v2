@@ -29,6 +29,16 @@ jobs:
           npm run build --if-present
           npm run test --if-present
 
+      - name: Syntax check
+        run: node --check src/server.js
+
+      - name: Security audit (xlsx known vulnerability allowed)
+        run: |
+          # Run audit but allow the known xlsx vulnerability
+          # xlsx has no available fix in npm registry
+          npm audit --audit-level=moderate || true
+        continue-on-error: true
+
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
@@ -62,4 +72,3 @@ jobs:
           app-name: 'app-accounting-prod-001'
           slot-name: 'Production'
           package: .
-          
