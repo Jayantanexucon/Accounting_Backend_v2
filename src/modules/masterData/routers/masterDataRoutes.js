@@ -2,7 +2,6 @@ import express from "express";
 import countryRoutes from "./countryRoutes.js";
 import stateRoutes from "./stateRoutes.js";
 import cityRoutes from "./cityRoutes.js";
-import currencyRoutes from "./currencyRoutes.js";
 import menuRoutes from "./menuRoutes.js";
 import entityRoutes from "./entityRoutes.js";
 import clientRoutes from "./clientRoutes.js";
@@ -15,7 +14,7 @@ const router = express.Router();
 router.use("/country", countryRoutes);
 router.use("/state", stateRoutes);
 router.use("/city", cityRoutes);
-router.use("/currency", currencyRoutes);
+// Currency is now embedded in Country model - no separate routes needed
 router.use("/menu", menuRoutes);
 router.use("/entity", entityRoutes);
 router.use("/client", clientRoutes);
