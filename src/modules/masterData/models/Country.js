@@ -16,7 +16,7 @@ const taxConfigSchema = new Schema(
   {
     taxSystem: {
       type: String,
-      enum: ["GST", "VAT", "SALES_TAX", "NONE"],
+      enum: ["GST", "VAT", "SALES_TAX","CORPORATE_TAX", "NONE"],
       default: "NONE",
     },
     isGSTApplicable: { type: Boolean, default: false },
