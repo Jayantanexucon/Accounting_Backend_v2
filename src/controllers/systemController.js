@@ -179,6 +179,7 @@ export const getModuleStatus = (req, res, next) => {
       });
     }
 
+    // ✅ getConnectedModules() is now synchronous (uses cached connections)
     const connectedModules = getConnectedModules();
     const moduleName = module.toLowerCase().trim();
     const coreModules = ["auth", "users", "companies", "masterData"];
