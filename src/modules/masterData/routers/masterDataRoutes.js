@@ -7,6 +7,7 @@ import entityRoutes from "./entityRoutes.js";
 import clientRoutes from "./clientRoutes.js";
 import vendorRoutes from "./vendorRoutes.js";
 import hsnRoutes from "./hsnRoutes.js";
+import countryTaxRoutes from "./countryTaxRoutes.js";
 
 const router = express.Router();
 
@@ -20,5 +21,6 @@ router.use("/entity", entityRoutes);
 router.use("/client", clientRoutes);
 router.use("/vendor", vendorRoutes);
 router.use("/hsn", hsnRoutes);
+router.use("/countryTax", countryTaxRoutes);
 
 export default router;
