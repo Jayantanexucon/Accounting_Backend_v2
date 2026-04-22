@@ -1,6 +1,6 @@
 import express from "express";
 import { protect } from "../../../middlewares/authMiddleware.js";
-import { accessControlMiddleware } from "../../../middlewares/accessBasedMiddleware.js";
+import { checkPermission } from "../../../middlewares/accessBasedMiddleware.js";
 import {
   createPurchaseOrder,
   getAllPurchaseOrders,
@@ -20,31 +20,31 @@ const router = express.Router();
 router.use(protect);
 
 // Create PO
-router.post("/", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "CREATE" }), createPurchaseOrder);
+router.post("/", checkPermission("PURCHASE_ORDER", "CREATE"), createPurchaseOrder);
 
 // Get all POs (with optional filtering)
-router.get("/", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getAllPurchaseOrders);
+router.get("/", checkPermission("PURCHASE_ORDER", "VIEW"), getAllPurchaseOrders);
 
 // Get PO statistics
-router.get("/stats/overview", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPOStats);
+router.get("/stats/overview", checkPermission("PURCHASE_ORDER", "VIEW"), getPOStats);
 
 // Get POs by status
-router.get("/status/:status", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPOsByStatus);
+router.get("/status/:status", checkPermission("PURCHASE_ORDER", "VIEW"), getPOsByStatus);
 
 // Search by PO number
-router.get("/search/number", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPurchaseOrderByNumber);
+router.get("/search/number", checkPermission("PURCHASE_ORDER", "VIEW"), getPurchaseOrderByNumber);
 
 // Get single PO by ID
-router.get("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), getPurchaseOrderById);
+router.get("/:id", checkPermission("PURCHASE_ORDER", "VIEW"), getPurchaseOrderById);
 
 // Update PO
-router.put("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "EDIT" }), updatePurchaseOrder);
+router.put("/:id", checkPermission("PURCHASE_ORDER", "EDIT"), updatePurchaseOrder);
 
 // Delete PO
-router.delete("/:id", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "DELETE" }), deletePurchaseOrder);
+router.delete("/:id", checkPermission("PURCHASE_ORDER", "DELETE"), deletePurchaseOrder);
 
 // Download routes
-router.get("/:id/download/word", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), downloadWordPurchaseOrder);
-router.get("/:id/download/pdf", accessControlMiddleware({ entityKey: "PURCHASE_ORDER", action: "VIEW" }), downloadPdfPurchaseOrder);
+router.get("/:id/download/word", checkPermission("PURCHASE_ORDER", "VIEW"), downloadWordPurchaseOrder);
+router.get("/:id/download/pdf", checkPermission("PURCHASE_ORDER", "VIEW"), downloadPdfPurchaseOrder);
 
 export default router;
