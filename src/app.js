@@ -25,12 +25,44 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// 🔧 Dynamic CORS Configuration for Development & Production
+const allowedOrigins = [
+  // Development
+  "http://localhost:5173",
+  "http://localhost:3000",
+  // Production - from environment variable
+  process.env.CLIENT_URL,
+  // Additional allowed origins from environment
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : []),
+].filter(Boolean); // Remove null/undefined values
+
+console.log("🔐 CORS Allowed Origins:", allowedOrigins.join(", "));
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
-    credentials: true,
+    origin: function (origin, callback) {
+      // Allow requests without origin (like mobile apps or curl requests)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`⚠️  CORS blocked request from origin: ${origin}`);
+        console.log(`   Allowed origins: ${allowedOrigins.join(", ")}`);
+        callback(new Error("CORS: Origin not allowed"));
+      }
+    },
+    credentials: true, // ✅ Allow credentials (cookies, Authorization headers)
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    maxAge: 86400, // 24 hours
   })
 );
+
 app.use(cookieParser());
 app.use(passport.initialize());
 

@@ -183,6 +183,28 @@ export const normalizeCountryPayload = (payload = {}) => {
     ? configuredTaxTypes.map((item) => safeTrim(item)).filter(Boolean)
     : DEFAULT_TAX_TYPES_BY_COUNTRY_TYPE[countryType] || DEFAULT_TAX_TYPES_BY_COUNTRY_TYPE.OTHER;
 
+  // Handle embedded currency (new structure)
+  let currency = payload.currency;
+  if (!currency || typeof currency !== "object") {
+    // Legacy support: currency was passed as separate fields
+    currency = {
+      currencyName: payload.currencyName || payload.countryName || "",
+      currencyCode: payload.currencyCode || payload.countryCode || "",
+      currencySymbol: payload.currencySymbol || "",
+    };
+  }
+
+  // Handle tax config (new structure)
+  let taxConfig = payload.taxConfig;
+  if (!taxConfig || typeof taxConfig !== "object") {
+    taxConfig = {
+      taxSystem: payload.countryType || "OTHER",
+      isGSTApplicable: payload.countryType === "GST",
+      isRCMApplicable: payload.isRCMApplicable || false,
+      isExportZeroRated: payload.isExportZeroRated || false,
+    };
+  }
+
   return {
     ...payload,
     countryName: safeTrim(payload.countryName),
@@ -192,6 +214,8 @@ export const normalizeCountryPayload = (payload = {}) => {
     postalCodeLabel: safeTrim(payload.postalCodeLabel),
     postalCodeRegex: safeTrim(payload.postalCodeRegex),
     taxTypes,
+    currency,
+    taxConfig,
   };
 };
 
