@@ -189,6 +189,24 @@ export const accessTokenController = async (req, res, next) => {
 
 export const fetchMe = async (req, res, next) => {
   try {
+    // 🔍 PRODUCTION DEBUG: Log incoming request details
+    const requestDebugInfo = {
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      origin: req.headers.origin,
+      referer: req.headers.referer,
+      hasAuthHeader: !!req.headers.authorization,
+      cookiesReceived: Object.keys(req.cookies || {}),
+      ac_cmp_value: req.cookies?.AC_CMP || null,
+      allCookies: req.cookies,
+    };
+
+    if (req.cookies?.AC_CMP) {
+      console.log(`✅ [fetchMe] Cookie AC_CMP received:`, requestDebugInfo);
+    } else {
+      console.warn(`⚠️  [fetchMe] NO AC_CMP Cookie found!`, requestDebugInfo);
+    }
+
     const azureEmail = (
       req.user?.preferred_username ||
       req.user?.email ||
@@ -225,11 +243,14 @@ export const fetchMe = async (req, res, next) => {
     const resolveSelectedCompany = (companies, fallbackAllCompanies = []) => {
       if (!Array.isArray(companies)) companies = [];
 
-      console.log(`[resolveSelectedCompany] Called with:`, {
-        cookieId: selectedCompanyId,
-        companiesCount: companies.length,
-        fallbackCount: fallbackAllCompanies.length,
-      });
+      const debugInfo = {
+        cookieValue: selectedCompanyId,
+        companiesAvailable: companies.length,
+        fallbackCompanies: fallbackAllCompanies.length,
+        userIsAdmin: user.role === "superAdmin",
+      };
+
+      console.log(`[resolveSelectedCompany]`, debugInfo);
 
       // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
@@ -262,7 +283,7 @@ export const fetchMe = async (req, res, next) => {
 
       // Priority 2: No companies found
       if (companies.length === 0) {
-        console.warn(`⚠️  [resolveSelectedCompany] No companies available`);
+        console.warn(`⚠️  [resolveSelectedCompany] No companies available for user`);
         return null;
       }
 
