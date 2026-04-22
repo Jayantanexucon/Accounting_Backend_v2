@@ -250,6 +250,7 @@ export const fetchMe = async (req, res, next) => {
       });
     }
 
+    // Primary: Filter by permissions
     const allowedCompanyIds = new Set(
       user?.permissions
         ?.map((p) => p.company?._id || p.companyId || p.company)
@@ -257,9 +258,23 @@ export const fetchMe = async (req, res, next) => {
         .map((companyId) => companyId.toString())
     );
 
-    const companies = allCompanies.filter((company) =>
+    let companies = allCompanies.filter((company) =>
       allowedCompanyIds.has(company?._id?.toString())
     );
+
+    // Fallback: If no companies from permissions, use direct ownership/employee status
+    if (companies.length === 0) {
+      companies = allCompanies.filter((company) => {
+        const isOwner = company?.owner?.toString() === user._id.toString();
+        const isEmployee = company?.employees?.some(
+          (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
+        );
+        return isOwner || isEmployee;
+      });
+
+      // Log the fallback for debugging
+      console.log(`⚠️  User ${user._id} has no permission-based companies. Using ownership/employee fallback:`, companies.length);
+    }
 
     return res.json({
       user,
