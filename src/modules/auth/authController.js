@@ -225,6 +225,12 @@ export const fetchMe = async (req, res, next) => {
     const resolveSelectedCompany = (companies, fallbackAllCompanies = []) => {
       if (!Array.isArray(companies)) companies = [];
 
+      console.log(`[resolveSelectedCompany] Called with:`, {
+        cookieId: selectedCompanyId,
+        companiesCount: companies.length,
+        fallbackCount: fallbackAllCompanies.length,
+      });
+
       // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
         // First, try to find in filtered companies (user has explicit permission)
@@ -232,7 +238,7 @@ export const fetchMe = async (req, res, next) => {
           (company) => company?._id?.toString() === selectedCompanyId
         );
         if (matchedCompany) {
-          console.log(`✅ Resolved company from cookie (in permissions): ${matchedCompany.name}`);
+          console.log(`✅ [resolveSelectedCompany] Resolved company from cookie (in permitted list): ${matchedCompany.name}`);
           return matchedCompany;
         }
 
@@ -246,25 +252,28 @@ export const fetchMe = async (req, res, next) => {
             (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
           );
           if (isOwner || isEmployee) {
-            console.log(`✅ Resolved company from cookie (owner/employee): ${ownershipMatch.name}`);
+            console.log(`✅ [resolveSelectedCompany] Resolved company from cookie (owner/employee check passed): ${ownershipMatch.name}`);
             return ownershipMatch;
           }
         }
 
-        console.warn(`⚠️  Cookie company ${selectedCompanyId} not found or access denied`);
+        console.warn(`⚠️  [resolveSelectedCompany] Cookie company ${selectedCompanyId} not found or access denied`);
       }
 
       // Priority 2: No companies found
-      if (companies.length === 0) return null;
+      if (companies.length === 0) {
+        console.warn(`⚠️  [resolveSelectedCompany] No companies available`);
+        return null;
+      }
 
       // Priority 3: If single company, return it
       if (companies.length === 1) {
-        console.log(`✅ Resolved company (single): ${companies[0].name}`);
+        console.log(`✅ [resolveSelectedCompany] Resolved company (single available): ${companies[0].name}`);
         return companies[0];
       }
 
       // Priority 4: Multiple companies, no valid cookie - return first company as default
-      console.log(`⚠️  Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
+      console.log(`⚠️  [resolveSelectedCompany] Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
       return companies[0];
     };
 
@@ -303,6 +312,25 @@ export const fetchMe = async (req, res, next) => {
 
       // Log the fallback for debugging
       console.log(`⚠️  User ${user._id} has no permission-based companies. Using ownership/employee fallback:`, companies.length);
+    }
+
+    // 🔧 FIX: Ensure cookie-selected company is in the list if user has access
+    if (selectedCompanyId) {
+      const cookieCompany = allCompanies.find(
+        (company) => company?._id?.toString() === selectedCompanyId
+      );
+      
+      if (cookieCompany) {
+        const isOwner = cookieCompany.owner?.toString() === user._id.toString();
+        const isEmployee = cookieCompany.employees?.some(
+          (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
+        );
+        
+        if ((isOwner || isEmployee) && !companies.find(c => c._id.toString() === selectedCompanyId)) {
+          console.log(`✅ Adding cookie-selected company to list: ${cookieCompany.name}`);
+          companies.push(cookieCompany);
+        }
+      }
     }
 
     return res.json({
