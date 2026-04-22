@@ -295,23 +295,63 @@ export const createInvoice = async (req, res, next) => {
 
 export const getAllInvoices = async (req, res, next) => {
   try {
-    const { companyId, status, approvalStatus, startDate, endDate, page, limit } = req.query;
+    const {
+      companyId,
+      status,
+      approvalStatus,
+      startDate,
+      endDate,
+      invoiceDateFrom,
+      invoiceDateTo,
+      invoiceNo,
+      clientName,
+      paymentStatus,
+      journalPosted,
+      createdBy,
+      createdAtFrom,
+      createdAtTo,
+      salesJournalPostedAtFrom,
+      salesJournalPostedAtTo,
+      page,
+      limit,
+    } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllInvoices");
     }
 
-
     const filter = { companyId };
     if (status) filter.status = status;
     if (approvalStatus) filter.approvalStatus = approvalStatus;
 
-    if (startDate && endDate) {
-      filter.invoiceDate = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
+    // Advanced Filters
+    if (invoiceNo) filter.invoiceNo = { $regex: invoiceNo, $options: "i" };
+    if (clientName) filter["billTo.name"] = { $regex: clientName, $options: "i" };
+    if (createdBy) filter.createdBy = createdBy;
+
+    if (paymentStatus) {
+      if (paymentStatus === "fully_paid") filter.status = { $in: ["PAID", "RECONCILED"] };
+      else if (paymentStatus === "partially_paid") filter.status = "PARTIALLY_PAID";
+      else if (paymentStatus === "unpaid") filter.status = "POSTED";
     }
+
+    if (journalPosted === "yes") filter.salesJournalId = { $exists: true, $ne: null };
+    else if (journalPosted === "no") filter.salesJournalId = null;
+
+    // Date Range Filters
+    const applyDateRange = (field, from, to) => {
+      if (from || to) {
+        if (!filter[field]) filter[field] = {};
+        if (from) filter[field].$gte = new Date(from);
+        if (to) filter[field].$lte = new Date(to);
+      }
+    };
+
+    // Use specific range if available, fallback to generic startDate/endDate for invoiceDate
+    applyDateRange("invoiceDate", invoiceDateFrom || startDate, invoiceDateTo || endDate);
+    applyDateRange("createdAt", createdAtFrom, createdAtTo);
+    applyDateRange("approvalDate", salesJournalPostedAtFrom, salesJournalPostedAtTo);
+
 
     const pageNo = Math.max(1, Number(page || 1));
     const pageLimit = Math.max(0, Number(limit || 0));
