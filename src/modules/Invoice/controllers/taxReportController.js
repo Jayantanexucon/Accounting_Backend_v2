@@ -142,7 +142,7 @@ const normalizeInvoiceRow = (invoice) => {
     invoiceNo: invoice.invoiceNo || "—",
     invoiceDate: invoiceDate ? invoiceDate.toISOString() : null,
     dueDate: invoice.dueDate ? new Date(invoice.dueDate).toISOString() : null,
-    status: invoice.status || "DRAFT",
+    status: invoice.status || "PENDING_APPROVAL",
     currency: invoice.currency || "INR",
     clientId,
     clientName,

@@ -133,8 +133,8 @@ const invoiceSchema = new mongoose.Schema(
     // Status
     status: {
       type: String,
-      enum: ["DRAFT", "POSTED", "PARTIALLY_PAID", "PAID", "RECONCILED"],
-      default: "DRAFT",
+      enum: ["PENDING_APPROVAL", "POSTED", "PARTIALLY_PAID", "PAID", "RECONCILED"],
+      default: "PENDING_APPROVAL",
     },
 
     // Accounting Linkage
