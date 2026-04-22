@@ -225,18 +225,26 @@ export const fetchMe = async (req, res, next) => {
     const resolveSelectedCompany = (companies) => {
       if (!Array.isArray(companies) || companies.length === 0) return null;
 
+      // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
         const matchedCompany = companies.find(
           (company) => company?._id?.toString() === selectedCompanyId
         );
-        if (matchedCompany) return matchedCompany;
+        if (matchedCompany) {
+          console.log(`✅ Resolved company from cookie: ${matchedCompany.name}`);
+          return matchedCompany;
+        }
       }
 
+      // Priority 2: If single company, return it
       if (companies.length === 1) {
+        console.log(`✅ Resolved company (single): ${companies[0].name}`);
         return companies[0];
       }
 
-      return null;
+      // Priority 3: Multiple companies, no cookie - return first company as default
+      console.log(`⚠️  Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
+      return companies[0];
     };
 
     const accessToken = createAccessToken(user);
