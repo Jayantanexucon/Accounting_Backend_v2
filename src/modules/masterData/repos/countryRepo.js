@@ -1,5 +1,4 @@
 import { getCountryModel } from "../models/Country.js";
-import { getCurrencyModel } from "../models/Currency.js";
 import AppError from "../../../utils/AppError.js";
 
 export const createCountryRepo = async (data) => {
@@ -14,9 +13,8 @@ export const createCountryRepo = async (data) => {
 
 export const findCountryByIdRepo = async (id) => {
   try {
-    await getCurrencyModel();
     const Country = await getCountryModel();
-    return await Country.findById(id).populate("currency");
+    return await Country.findById(id);
   } catch (error) {
     throw new AppError(error.message, 500, "findCountryByIdRepo");
   }
@@ -24,9 +22,8 @@ export const findCountryByIdRepo = async (id) => {
 
 export const getAllCountriesRepo = async () => {
   try {
-    await getCurrencyModel();
     const Country = await getCountryModel();
-    return await Country.find({ isActive: true }).populate("currency").sort({ createdAt: -1 });
+    return await Country.find({ isActive: true }).sort({ createdAt: -1 });
   } catch (error) {
     throw new AppError(error.message, 500, "getAllCountriesRepo");
   }
@@ -61,9 +58,8 @@ export const findCountryByCodeRepo = async (code) => {
 
 export const findCountryByNameRepo = async (countryName) => {
   try {
-    await getCurrencyModel();
     const Country = await getCountryModel();
-    return await Country.findOne({ countryName }).populate("currency");
+    return await Country.findOne({ countryName });
   } catch (error) {
     throw new AppError(error.message, 500, "findCountryByNameRepo");
   }
