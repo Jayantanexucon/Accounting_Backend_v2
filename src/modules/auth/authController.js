@@ -225,18 +225,26 @@ export const fetchMe = async (req, res, next) => {
     const resolveSelectedCompany = (companies) => {
       if (!Array.isArray(companies) || companies.length === 0) return null;
 
+      // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
         const matchedCompany = companies.find(
           (company) => company?._id?.toString() === selectedCompanyId
         );
-        if (matchedCompany) return matchedCompany;
+        if (matchedCompany) {
+          console.log(`✅ Resolved company from cookie: ${matchedCompany.name}`);
+          return matchedCompany;
+        }
       }
 
+      // Priority 2: If single company, return it
       if (companies.length === 1) {
+        console.log(`✅ Resolved company (single): ${companies[0].name}`);
         return companies[0];
       }
 
-      return null;
+      // Priority 3: Multiple companies, no cookie - return first company as default
+      console.log(`⚠️  Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
+      return companies[0];
     };
 
     const accessToken = createAccessToken(user);
@@ -250,6 +258,7 @@ export const fetchMe = async (req, res, next) => {
       });
     }
 
+    // Primary: Filter by permissions
     const allowedCompanyIds = new Set(
       user?.permissions
         ?.map((p) => p.company?._id || p.companyId || p.company)
@@ -257,9 +266,23 @@ export const fetchMe = async (req, res, next) => {
         .map((companyId) => companyId.toString())
     );
 
-    const companies = allCompanies.filter((company) =>
+    let companies = allCompanies.filter((company) =>
       allowedCompanyIds.has(company?._id?.toString())
     );
+
+    // Fallback: If no companies from permissions, use direct ownership/employee status
+    if (companies.length === 0) {
+      companies = allCompanies.filter((company) => {
+        const isOwner = company?.owner?.toString() === user._id.toString();
+        const isEmployee = company?.employees?.some(
+          (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
+        );
+        return isOwner || isEmployee;
+      });
+
+      // Log the fallback for debugging
+      console.log(`⚠️  User ${user._id} has no permission-based companies. Using ownership/employee fallback:`, companies.length);
+    }
 
     return res.json({
       user,
