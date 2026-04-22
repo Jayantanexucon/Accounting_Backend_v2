@@ -222,27 +222,48 @@ export const fetchMe = async (req, res, next) => {
     const selectedCompanyId = req.cookies?.AC_CMP;
     const allCompanies = await findCompaniesRepo({});
 
-    const resolveSelectedCompany = (companies) => {
-      if (!Array.isArray(companies) || companies.length === 0) return null;
+    const resolveSelectedCompany = (companies, fallbackAllCompanies = []) => {
+      if (!Array.isArray(companies)) companies = [];
 
       // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
+        // First, try to find in filtered companies (user has explicit permission)
         const matchedCompany = companies.find(
           (company) => company?._id?.toString() === selectedCompanyId
         );
         if (matchedCompany) {
-          console.log(`✅ Resolved company from cookie: ${matchedCompany.name}`);
+          console.log(`✅ Resolved company from cookie (in permissions): ${matchedCompany.name}`);
           return matchedCompany;
         }
+
+        // If not in filtered list, check if user owns or is employee of that company
+        const ownershipMatch = fallbackAllCompanies.find(
+          (company) => company?._id?.toString() === selectedCompanyId
+        );
+        if (ownershipMatch) {
+          const isOwner = ownershipMatch.owner?.toString() === user._id.toString();
+          const isEmployee = ownershipMatch.employees?.some(
+            (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
+          );
+          if (isOwner || isEmployee) {
+            console.log(`✅ Resolved company from cookie (owner/employee): ${ownershipMatch.name}`);
+            return ownershipMatch;
+          }
+        }
+
+        console.warn(`⚠️  Cookie company ${selectedCompanyId} not found or access denied`);
       }
 
-      // Priority 2: If single company, return it
+      // Priority 2: No companies found
+      if (companies.length === 0) return null;
+
+      // Priority 3: If single company, return it
       if (companies.length === 1) {
         console.log(`✅ Resolved company (single): ${companies[0].name}`);
         return companies[0];
       }
 
-      // Priority 3: Multiple companies, no cookie - return first company as default
+      // Priority 4: Multiple companies, no valid cookie - return first company as default
       console.log(`⚠️  Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
       return companies[0];
     };
@@ -254,7 +275,7 @@ export const fetchMe = async (req, res, next) => {
         user,
         accessToken,
         companies: allCompanies,
-        selectedCompany: resolveSelectedCompany(allCompanies),
+        selectedCompany: resolveSelectedCompany(allCompanies, allCompanies),
       });
     }
 
@@ -288,7 +309,7 @@ export const fetchMe = async (req, res, next) => {
       user,
       accessToken,
       companies,
-      selectedCompany: resolveSelectedCompany(companies),
+      selectedCompany: resolveSelectedCompany(companies, allCompanies),
     });
   } catch (error) {
     next(error);
