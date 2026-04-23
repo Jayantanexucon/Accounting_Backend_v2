@@ -18,6 +18,8 @@ import {
   postSalesJournal,
   exportInvoiceById,
   exportInvoiceListEndpoint,
+  downloadWordInvoice,
+  downloadPdfInvoice,
 } from "../controllers/invoiceController.js";
 import {
   getPOTaxReport,
@@ -77,8 +79,12 @@ router.post("/:id/payment", checkPermission("INVOICE", "EDIT"), recordPayment);
 // Post sales journal
 router.post("/:id/post-sales-journal", checkPermission("INVOICE", "EDIT"), postSalesJournal);
 
-// Export single invoice
+// Export single invoice (legacy, kept for fallback if needed)
 router.get("/:id/export", checkPermission("INVOICE", "VIEW"), exportInvoiceById);
+
+// Download routes
+router.get("/:id/download/word", checkPermission("INVOICE", "VIEW"), downloadWordInvoice);
+router.get("/:id/download/pdf", checkPermission("INVOICE", "VIEW"), downloadPdfInvoice);
 
 // Export invoice list
 router.get("/export/list/all", checkPermission("INVOICE", "VIEW"), exportInvoiceListEndpoint);

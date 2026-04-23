@@ -24,7 +24,12 @@ import { getAccountsRepo } from "../../Account/repos/accountRepo.js";
 import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
 import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
-import { exportInvoice, exportInvoiceList } from "../services/invoiceExportService.js";
+import { exportInvoice, exportInvoiceList, prepareInvoiceData } from "../services/invoiceExportService.js";
+import {
+  generateWordDocument,
+  generatePdfFromWord,
+  sendDocumentResponse,
+} from "../../../utils/documentGenerator.js";
 import {
   sendInvoiceCreatedNotification,
   sendInvoiceApprovedNotification,
@@ -1169,6 +1174,77 @@ export const createInvoiceWithJournal = async (req, res, next) => {
         message: "Invoice created successfully",
       }).send(res);
     }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download Invoice as Word document
+ */
+export const downloadWordInvoice = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "downloadWordInvoice");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404, "downloadWordInvoice");
+    }
+
+    const templateName = invoice.withSignature
+      ? "Invoice-Template With Signeture.docx"
+      : "Invoice-Template without signeture.docx";
+
+    const templateData = prepareInvoiceData(invoice);
+    const buffer = await generateWordDocument(templateName, templateData);
+
+    sendDocumentResponse(
+      res,
+      buffer,
+      `Invoice_${invoice.invoiceNo}.docx`,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download Invoice as PDF document
+ */
+export const downloadPdfInvoice = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "downloadPdfInvoice");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404, "downloadPdfInvoice");
+    }
+
+    const templateName = invoice.withSignature
+      ? "Invoice-Template With Signeture.docx"
+      : "Invoice-Template without signeture.docx";
+
+    const templateData = prepareInvoiceData(invoice);
+    const wordBuffer = await generateWordDocument(templateName, templateData);
+    const pdfBuffer = await generatePdfFromWord(wordBuffer);
+
+    sendDocumentResponse(
+      res,
+      pdfBuffer,
+      `Invoice_${invoice.invoiceNo}.pdf`,
+      "application/pdf"
+    );
   } catch (error) {
     next(error);
   }

@@ -26,7 +26,7 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
   // Get trial balance
   const trialBalance = await getTrialBalance(companyId, asOfDate, {
     groupByScheduleHead: true,
-    includeZeroBalance: false,
+    includeZeroBalance: true,
   });
 
   // Filter and group accounts by sheet section
@@ -69,36 +69,64 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
     }
   }
 
-  // Aggregate by schedule group (Current vs Non-Current)
+  // Aggregate by schedule group and line item
   const groupAssets = {};
   const groupLiabilities = {};
   const groupEquity = {};
 
-  for (const asset of assets) {
-    const group = asset.scheduleGroup || "Other";
-    if (!groupAssets[group]) {
-      groupAssets[group] = { total: 0, items: [] };
+  // Initialize all standard groups and line items from config
+  const initializeSections = (nature, target) => {
+    const config = SCHEDULE_III_CONFIG[nature];
+    if (!config) return;
+    for (const [groupName, lineItems] of Object.entries(config.groups)) {
+      target[groupName] = { total: 0, items: [], lineItems: {} };
+      for (const lineItem of lineItems) {
+        target[groupName].lineItems[lineItem] = { total: 0, items: [] };
+      }
     }
+  };
+
+  initializeSections("Asset", groupAssets);
+  initializeSections("Liability", groupLiabilities);
+  initializeSections("Equity", groupEquity);
+
+  for (const asset of assets) {
+    const group = asset.scheduleGroup || "Other Current Assets";
+    const lineItem = asset.scheduleLineItem || "Other Current Assets";
+    
+    if (!groupAssets[group]) groupAssets[group] = { total: 0, items: [], lineItems: {} };
+    if (!groupAssets[group].lineItems[lineItem]) groupAssets[group].lineItems[lineItem] = { total: 0, items: [] };
+    
     groupAssets[group].items.push(asset);
     groupAssets[group].total += asset.amount;
+    groupAssets[group].lineItems[lineItem].items.push(asset);
+    groupAssets[group].lineItems[lineItem].total += asset.amount;
   }
 
   for (const liability of liabilities) {
-    const group = liability.scheduleGroup || "Other";
-    if (!groupLiabilities[group]) {
-      groupLiabilities[group] = { total: 0, items: [] };
-    }
+    const group = liability.scheduleGroup || "Other Current Liabilities";
+    const lineItem = liability.scheduleLineItem || "Other Current Liabilities";
+
+    if (!groupLiabilities[group]) groupLiabilities[group] = { total: 0, items: [], lineItems: {} };
+    if (!groupLiabilities[group].lineItems[lineItem]) groupLiabilities[group].lineItems[lineItem] = { total: 0, items: [] };
+
     groupLiabilities[group].items.push(liability);
     groupLiabilities[group].total += liability.amount;
+    groupLiabilities[group].lineItems[lineItem].items.push(liability);
+    groupLiabilities[group].lineItems[lineItem].total += liability.amount;
   }
 
   for (const eq of equity) {
     const group = eq.scheduleGroup || "Shareholders' Funds";
-    if (!groupEquity[group]) {
-      groupEquity[group] = { total: 0, items: [] };
-    }
+    const lineItem = eq.scheduleLineItem || "Reserves and Surplus";
+
+    if (!groupEquity[group]) groupEquity[group] = { total: 0, items: [], lineItems: {} };
+    if (!groupEquity[group].lineItems[lineItem]) groupEquity[group].lineItems[lineItem] = { total: 0, items: [] };
+
     groupEquity[group].items.push(eq);
     groupEquity[group].total += eq.amount;
+    groupEquity[group].lineItems[lineItem].items.push(eq);
+    groupEquity[group].lineItems[lineItem].total += eq.amount;
   }
 
   const totalAssets = assets.reduce((sum, a) => sum + a.amount, 0);
@@ -164,7 +192,7 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   // Get trial balance for the period
   const tb = await getTrialBalanceForPeriod(companyId, startDate, endDate, {
     groupByScheduleHead: true,
-    includeZeroBalance: false,
+    includeZeroBalance: true,
   });
 
   // Filter P&L accounts
@@ -205,6 +233,14 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   // Aggregate by schedule line item
   const groupRevenue = {};
   const groupExpenses = {};
+
+  // Initialize standard line items
+  for (const item of SCHEDULE_III_CONFIG.Income.groups.Revenue) {
+    groupRevenue[item] = [];
+  }
+  for (const item of SCHEDULE_III_CONFIG.Expense.groups.Expenses) {
+    groupExpenses[item] = [];
+  }
 
   for (const rev of revenue) {
     const lineItem = rev.scheduleLineItem || "Other Income";

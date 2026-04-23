@@ -109,6 +109,9 @@ const getOutstandingAmount = (invoice) => {
 };
 
 const getTaxLedgerField = (invoice) => {
+  if (invoice.taxSummary && invoice.taxSummary.length > 0) {
+    return "taxAccounts"; // Now returns a map
+  }
   if (Number(invoice.totalIGSTAmount || 0) > 0) return "igstAccount";
   if (Number(invoice.totalCGSTAmount || 0) > 0) return "cgstAccount";
   if (Number(invoice.totalSGSTAmount || 0) > 0) return "sgstAccount";
@@ -278,70 +281,64 @@ const ensureInvoiceAccounts = async (invoice, userId) => {
     userId,
   });
 
-  const cgstAccount =
-    Number(invoice.totalCGSTAmount || 0) > 0
-      ? await ensureLedgerAccount({
-          companyId,
-          groupData: {
-            name: "GST Payable",
-            nature: "Liability",
-            balanceType: "Credit",
-            scheduleMainHead: "Equity and Liabilities",
-            scheduleGroup: "Current Liabilities",
-            scheduleLineItem: "Other Current Liabilities",
-          },
-          accountName: "CGST Payable",
-          searchPatterns: ["cgst"],
-          prefix: "CGST",
-          userId,
-        })
-      : null;
+  const taxAccounts = {};
+  const taxSummary = Array.isArray(invoice.taxSummary) ? invoice.taxSummary : [];
+  
+  // Legacy support if taxSummary is empty but total amounts exist
+  if (taxSummary.length === 0) {
+    if (Number(invoice.totalCGSTAmount || 0) > 0) taxSummary.push({ label: "CGST Payable", taxType: "CGST", amount: invoice.totalCGSTAmount });
+    if (Number(invoice.totalSGSTAmount || 0) > 0) taxSummary.push({ label: "SGST Payable", taxType: "SGST", amount: invoice.totalSGSTAmount });
+    if (Number(invoice.totalIGSTAmount || 0) > 0) taxSummary.push({ label: "IGST Payable", taxType: "IGST", amount: invoice.totalIGSTAmount });
+  }
 
-  const sgstAccount =
-    Number(invoice.totalSGSTAmount || 0) > 0
-      ? await ensureLedgerAccount({
-          companyId,
-          groupData: {
-            name: "GST Payable",
-            nature: "Liability",
-            balanceType: "Credit",
-            scheduleMainHead: "Equity and Liabilities",
-            scheduleGroup: "Current Liabilities",
-            scheduleLineItem: "Other Current Liabilities",
-          },
-          accountName: "SGST Payable",
-          searchPatterns: ["sgst"],
-          prefix: "SGST",
-          userId,
-        })
-      : null;
+  for (const tax of taxSummary) {
+    const label = tax.label || tax.taxType || "Tax";
+    const amount = Number(tax.amount || 0);
+    if (amount <= 0) continue;
 
-  const igstAccount =
-    Number(invoice.totalIGSTAmount || 0) > 0
-      ? await ensureLedgerAccount({
-          companyId,
-          groupData: {
-            name: "GST Payable",
-            nature: "Liability",
-            balanceType: "Credit",
-            scheduleMainHead: "Equity and Liabilities",
-            scheduleGroup: "Current Liabilities",
-            scheduleLineItem: "Other Current Liabilities",
-          },
-          accountName: "IGST Payable",
-          searchPatterns: ["igst"],
-          prefix: "IGST",
-          userId,
-        })
-      : null;
+    const accountName = label.toLowerCase().includes("payable") ? label : `${label} Payable`;
+    const taxAccount = await ensureLedgerAccount({
+      companyId,
+      groupData: {
+        name: "Taxes Payable",
+        nature: "Liability",
+        balanceType: "Credit",
+        scheduleMainHead: "Equity and Liabilities",
+        scheduleGroup: "Current Liabilities",
+        scheduleLineItem: "Other Current Liabilities",
+      },
+      accountName: accountName,
+      searchPatterns: [label, tax.taxType || ""],
+      prefix: (tax.taxType || "TAX").toUpperCase(),
+      userId,
+    });
+    taxAccounts[label] = taxAccount;
+  }
+
+  const tdsAccount = Number(invoice.tdsAmount || invoice.totalTDSAmount || 0) > 0
+    ? await ensureLedgerAccount({
+        companyId,
+        groupData: {
+          name: "TDS Receivable",
+          nature: "Asset",
+          balanceType: "Debit",
+          scheduleMainHead: "Assets",
+          scheduleGroup: "Current Assets",
+          scheduleLineItem: "Other Current Assets",
+        },
+        accountName: "TDS Receivable",
+        searchPatterns: ["tds receivable", "tax deducted at source"],
+        prefix: "TDS",
+        userId,
+      })
+    : null;
 
   return {
     clientName,
     clientLedger,
     salesAccount,
-    cgstAccount,
-    sgstAccount,
-    igstAccount,
+    taxAccounts,
+    tdsAccount,
   };
 };
 
@@ -390,15 +387,17 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
 
   const accounts = await ensureInvoiceAccounts(invoice, userId);
   const totalAmount = getInvoiceSettlementAmount(invoice);
+  const tdsAmount = Number(invoice.tdsAmount || invoice.totalTDSAmount || 0);
+  const netReceivable = totalAmount - tdsAmount;
 
   const journalLines = [
     {
       accountId: accounts.clientLedger.account._id,
       accountCode: accounts.clientLedger.account.code,
       accountName: accounts.clientLedger.account.name,
-      debitAmount: totalAmount,
+      debitAmount: netReceivable,
       creditAmount: 0,
-      description: `Invoice receivable ${invoice.invoiceNo}`,
+      description: `Invoice receivable ${invoice.invoiceNo} (Net of TDS)`,
       linkedToClientId: invoice.billTo?.clientId || null,
     },
     {
@@ -411,36 +410,30 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
     },
   ];
 
-  if (Number(invoice.totalCGSTAmount || 0) > 0 && accounts.cgstAccount) {
+  if (tdsAmount > 0 && accounts.tdsAccount) {
     journalLines.push({
-      accountId: accounts.cgstAccount.account._id,
-      accountCode: accounts.cgstAccount.account.code,
-      accountName: accounts.cgstAccount.account.name,
-      debitAmount: 0,
-      creditAmount: Number(invoice.totalCGSTAmount || 0),
-      description: `CGST for ${invoice.invoiceNo}`,
+      accountId: accounts.tdsAccount.account._id,
+      accountCode: accounts.tdsAccount.account.code,
+      accountName: accounts.tdsAccount.account.name,
+      debitAmount: tdsAmount,
+      creditAmount: 0,
+      description: `TDS Receivable for ${invoice.invoiceNo}`,
+      linkedToClientId: invoice.billTo?.clientId || null,
     });
   }
 
-  if (Number(invoice.totalSGSTAmount || 0) > 0 && accounts.sgstAccount) {
-    journalLines.push({
-      accountId: accounts.sgstAccount.account._id,
-      accountCode: accounts.sgstAccount.account.code,
-      accountName: accounts.sgstAccount.account.name,
-      debitAmount: 0,
-      creditAmount: Number(invoice.totalSGSTAmount || 0),
-      description: `SGST for ${invoice.invoiceNo}`,
-    });
-  }
+  for (const [label, taxAcc] of Object.entries(accounts.taxAccounts)) {
+    const taxEntry = invoice.taxSummary?.find(t => (t.label || t.taxType) === label) || {};
+    const amount = Number(taxEntry.amount || 0);
+    if (amount <= 0) continue;
 
-  if (Number(invoice.totalIGSTAmount || 0) > 0 && accounts.igstAccount) {
     journalLines.push({
-      accountId: accounts.igstAccount.account._id,
-      accountCode: accounts.igstAccount.account.code,
-      accountName: accounts.igstAccount.account.name,
+      accountId: taxAcc.account._id,
+      accountCode: taxAcc.account.code,
+      accountName: taxAcc.account.name,
       debitAmount: 0,
-      creditAmount: Number(invoice.totalIGSTAmount || 0),
-      description: `IGST for ${invoice.invoiceNo}`,
+      creditAmount: amount,
+      description: `${label} for ${invoice.invoiceNo}`,
     });
   }
 
@@ -468,13 +461,11 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
     lines: journalLines,
   });
 
-  const taxField = getTaxLedgerField(invoice);
-
   const updatedInvoice = await updateInvoiceRepo(invoice._id, {
     salesJournalId: journal._id,
     debtorAccountId: accounts.clientLedger.account._id,
     revenueAccountId: accounts.salesAccount.account._id,
-    taxAccountId: taxField ? accounts[taxField]?.account?._id || null : null,
+    taxAccountId: Object.values(accounts.taxAccounts)[0]?.account?._id || null, // Primary tax account
     accountingStatus: "completed",
     updatedBy: userId,
   });
@@ -491,7 +482,7 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
       salesJournalId: journal._id,
       debtorAccountId: accounts.clientLedger.account._id,
       revenueAccountId: accounts.salesAccount.account._id,
-      taxAccountId: taxField ? accounts[taxField]?.account?._id || null : null,
+      taxAccounts: Object.keys(accounts.taxAccounts),
     },
     description: `Sales journal posted for invoice ${invoice.invoiceNo}`,
   });
@@ -540,7 +531,10 @@ export const recordPaymentForInvoice = async ({
   }
 
   const outstandingAmount = getOutstandingAmount(invoice);
-  if (grossAmount > outstandingAmount + 0.0001) {
+  // Net outstanding for the client is netPayable - alreadyPaid
+  const netOutstanding = Math.max(0, Number(invoice.netPayable || invoice.amountDue - (invoice.tdsAmount || 0)) - Number(invoice.paidAmount || 0));
+
+  if (normalizedAmountPaid > netOutstanding + 0.0001) {
     throw new AppError("Payment exceeds invoice outstanding amount", 400, "recordPaymentForInvoice");
   }
 
@@ -619,7 +613,7 @@ export const recordPaymentForInvoice = async ({
     accountCode: accounts.clientLedger.account.code,
     accountName: accounts.clientLedger.account.name,
     debitAmount: 0,
-    creditAmount: grossAmount,
+    creditAmount: normalizedAmountPaid,
     description: `Receivable settlement for ${invoice.invoiceNo}`,
     linkedToClientId: clientId || invoice.billTo?.clientId || null,
   });
@@ -765,6 +759,9 @@ export const validateInvoiceAccounts = async (req, res, next) => {
     const cgstAccount = findAccount((account) => /cgst/i.test(account.name || ""));
     const sgstAccount = findAccount((account) => /sgst/i.test(account.name || ""));
     const igstAccount = findAccount((account) => /igst/i.test(account.name || ""));
+    const vatAccount = findAccount((account) => /vat/i.test(account.name || ""));
+    const salesTaxAccount = findAccount((account) => /sales tax/i.test(account.name || ""));
+    const tdsAccount = findAccount((account) => /tds receivable/i.test(account.name || ""));
 
     if (salesAccount) {
       existingAccounts.push({
@@ -786,6 +783,9 @@ export const validateInvoiceAccounts = async (req, res, next) => {
       ["cgst", cgstAccount],
       ["sgst", sgstAccount],
       ["igst", igstAccount],
+      ["vat", vatAccount],
+      ["sales_tax", salesTaxAccount],
+      ["tds", tdsAccount],
     ]) {
       if (account) {
         existingAccounts.push({
