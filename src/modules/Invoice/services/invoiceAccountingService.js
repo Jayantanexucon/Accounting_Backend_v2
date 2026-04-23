@@ -21,6 +21,21 @@ export const setAccountingDependencies = (journal, account) => {
   accountingModuleAvailable = !!journal && !!account;
 };
 
+const buildTaxPostingLines = (invoice = {}) => {
+  const taxLines = [
+    { type: "CGST", amount: Number(invoice.totalCGSTAmount || 0) },
+    { type: "SGST", amount: Number(invoice.totalSGSTAmount || 0) },
+    { type: "IGST", amount: Number(invoice.totalIGSTAmount || 0) },
+  ].filter((entry) => entry.amount > 0);
+
+  if (taxLines.length > 0) {
+    return taxLines;
+  }
+
+  const totalGSTAmount = Number(invoice.totalGSTAmount || 0);
+  return totalGSTAmount > 0 ? [{ type: "GST", amount: totalGSTAmount }] : [];
+};
+
 export const createInvoiceJournalEntry = async (invoiceId, companyId, userId) => {
   try {
     if (!accountingModuleAvailable || !journalRepo || !accountRepo) {
@@ -88,25 +103,19 @@ export const createInvoiceJournalEntry = async (invoiceId, companyId, userId) =>
       }
     }
 
-    // Create or get Tax Payable account
-    let taxAccount = null;
-    if (invoice.taxAccountId) {
-      taxAccount = { _id: invoice.taxAccountId };
-    } else {
-      if (accountRepo && accountRepo.getOrCreateAccountRepo) {
-        // Determine GST type from invoice items
-        const hasIGST = invoice.totalIGSTAmount > 0;
-        const taxAccountName = hasIGST ? "IGST Payable" : "GST Payable";
-        const taxAccountCode = hasIGST ? "IGST-PAY" : "GST-PAY";
-
-        taxAccount = await accountRepo.getOrCreateAccountRepo({
+    const taxPostingLines = buildTaxPostingLines(invoice);
+    const taxAccounts = [];
+    if (accountRepo && accountRepo.getOrCreateAccountRepo) {
+      for (const taxLine of taxPostingLines) {
+        const taxAccount = await accountRepo.getOrCreateAccountRepo({
           companyId,
-          accountName: taxAccountName,
-          accountCode: taxAccountCode,
+          accountName: `${taxLine.type} Payable`,
+          accountCode: `${taxLine.type}-PAY`,
           accountGroup: "Tax Accounts",
           accountType: "Liability",
           parentGroup: "Current Liabilities",
         });
+        taxAccounts.push({ ...taxLine, account: taxAccount });
       }
     }
 
@@ -141,21 +150,16 @@ export const createInvoiceJournalEntry = async (invoiceId, companyId, userId) =>
           description: "Revenue from sales",
           lineOrder: 2,
         },
-        // Credit Tax Payable Account (if GST exists)
-        ...(invoice.totalGSTAmount > 0
-          ? [
-              {
-                accountId: taxAccount._id,
-                accountName: taxAccount.accountName || "GST Payable",
-                accountCode: taxAccount.accountCode,
-                amount: invoice.totalGSTAmount,
-                debit: 0,
-                credit: invoice.totalGSTAmount,
-                description: `GST Payable - ${invoice.totalGSTAmount}`,
-                lineOrder: 3,
-              },
-            ]
-          : []),
+        ...taxAccounts.map((taxLine, index) => ({
+          accountId: taxLine.account._id,
+          accountName: taxLine.account.accountName || `${taxLine.type} Payable`,
+          accountCode: taxLine.account.accountCode,
+          amount: taxLine.amount,
+          debit: 0,
+          credit: taxLine.amount,
+          description: `${taxLine.type} Payable - ${taxLine.amount}`,
+          lineOrder: 3 + index,
+        })),
       ],
       status: "POSTED",
       approvalStatus: "Approved",
@@ -185,7 +189,7 @@ export const createInvoiceJournalEntry = async (invoiceId, companyId, userId) =>
       "completed",
       debtorAccount._id,
       revenueAccount._id,
-      taxAccount._id
+      taxAccounts[0]?.account?._id || null
     );
 
     return {

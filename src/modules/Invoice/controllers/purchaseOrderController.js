@@ -8,6 +8,11 @@ import {
   sendDocumentResponse,
 } from "../../../utils/documentGenerator.js";
 import {
+  buildTaxMeta,
+  normalizeLineItemTax,
+  round2,
+} from "../utils/taxNormalization.js";
+import {
   createPurchaseOrderRepo,
   getPurchaseOrderByIdRepo,
   getPurchaseOrdersRepo,
@@ -18,6 +23,7 @@ import {
   getPOsWithInvoiceProgressRepo,
 } from "../repos/purchaseOrderRepo.js";
 import { getInvoicesByPORepo } from "../repos/invoiceRepo.js";
+import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
 
 const generatePONumber = async (companyId) => {
   const timestamp = Date.now();
@@ -29,6 +35,37 @@ const billingModelMap = {
   milestone: "milestone",
   monthly: "fixed",
   hourly: "hourly",
+};
+
+const normalizeStateCode = (value = "") => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const digitMatch = normalized.match(/^(\d{2})/);
+  if (digitMatch) return digitMatch[1];
+  const alphaMatch = normalized.match(/^([A-Z]{2})/);
+  return alphaMatch ? alphaMatch[1] : normalized;
+};
+
+const getGstSplit = (fromAddress = {}, toAddress = {}) => {
+  const fromStateCode = normalizeStateCode(fromAddress?.stateCode);
+  const toStateCode = normalizeStateCode(toAddress?.stateCode);
+
+  if (!fromStateCode || !toStateCode) return undefined;
+  return fromStateCode === toStateCode ? "INTRA" : "INTER";
+};
+
+const getCompanyStateCode = (company = {}) =>
+  normalizeStateCode(company?.taxDetails?.gstin || company?.registeredAddress?.stateCode);
+
+const getPartyStateCode = (party = {}) =>
+  normalizeStateCode(party?.GSTIN || party?.gstin || party?.stateCode);
+
+const getCompanyBasedGstSplit = (company = {}, party = {}) => {
+  const companyStateCode = getCompanyStateCode(company);
+  const partyStateCode = getPartyStateCode(party);
+
+  if (!companyStateCode || !partyStateCode) return undefined;
+  return companyStateCode === partyStateCode ? "INTRA" : "INTER";
 };
 
 export const createPurchaseOrder = async (req, res, next) => {
@@ -53,24 +90,55 @@ export const createPurchaseOrder = async (req, res, next) => {
       withSignature,
     } = req.body;
 
+    const company = companyId ? await findCompanyByIdRepo(companyId) : null;
+
     // ── Totals ────────────────────────────────────────────────────
     let totalTaxableValue = 0;
-    let totalGSTAmount = 0;
     let totalAmount = 0;
+    const gstSplit =
+      getCompanyBasedGstSplit(company, vendor) || getGstSplit(vendor, deliverTo);
+    const normalizedItems = Array.isArray(items)
+      ? items.map((item) => {
+          const normalizedTax = normalizeLineItemTax(item, {
+            taxType: req.body.taxType,
+            taxLabel: req.body.taxLabel,
+            gstSplit,
+          });
+          const taxableValue = Number(item.taxableValue) || 0;
+          const totalAmountValue =
+            Number(item.totalAmount) ||
+            Number(item.total) ||
+            taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
+            0;
 
-    if (Array.isArray(items) && items.length > 0) {
-      items.forEach((item) => {
-        totalTaxableValue += Number(item.taxableValue) || 0;
-        totalGSTAmount += Number(item.gstAmount) || 0;
-        // Use whichever is provided: totalAmount (from backend) or total (from frontend)
-        totalAmount += Number(item.totalAmount || item.total) || 0;
-      });
-    }
+          totalTaxableValue += taxableValue;
+          totalAmount += totalAmountValue;
+
+          return {
+            ...item,
+            hsnId: item.hsnId ? String(item.hsnId) : undefined,
+            hsnSac: item.hsnSac || "",
+            unit: item.unit || "each",
+            quantity: Number(item.quantity) || 0,
+            rate: Number(item.rate) || 0,
+            taxableValue,
+            totalAmount: totalAmountValue,
+            ...normalizedTax,
+          };
+        })
+      : [];
+
+    const computedTaxMeta = buildTaxMeta({
+      taxType: req.body.taxType,
+      taxLabel: req.body.taxLabel,
+      taxSummary: req.body.taxSummary,
+      totalTaxAmount: req.body.totalTaxAmount,
+      items: normalizedItems,
+    });
 
     // For milestone POs the totals are set at contract level, not item level
     if (paymentTerms === "milestone") {
       totalTaxableValue = Number(req.body.totalTaxableValue) || totalTaxableValue;
-      totalGSTAmount = Number(req.body.totalGSTAmount) || totalGSTAmount;
       totalAmount = Number(req.body.totalAmount) || totalAmount;
     }
 
@@ -106,30 +174,22 @@ export const createPurchaseOrder = async (req, res, next) => {
       deliverTo,
 
       // Items — hsnId comes as a String from frontend, stored as String
-      items: Array.isArray(items) ? items.map((item) => ({
-        ...item,
-        hsnId: item.hsnId ? String(item.hsnId) : undefined,
-        hsnSac: item.hsnSac || "",
-        unit: item.unit || "each",   // Default to "each" if not provided
-        quantity: Number(item.quantity) || 0,
-        rate: Number(item.rate) || 0,
-        gstRate: Number(item.gstRate) || 0,
-        gstAmount: Number(item.gstAmount) || 0,
-        taxableValue: Number(item.taxableValue) || 0,
-        // Calculate totalAmount: use provided totalAmount, or calc from total/taxableValue+gstAmount
-        totalAmount: Number(item.totalAmount) || Number(item.total) || (Number(item.taxableValue) + Number(item.gstAmount)) || 0,
-      })) : [],
+      items: normalizedItems,
 
       milestones: normalizedMilestones,
       resources: Array.isArray(resources) ? resources : [],
       attendanceRecords: [],
 
-      totalTaxableValue: Math.round(totalTaxableValue * 100) / 100,
-      totalGSTAmount: Math.round(totalGSTAmount * 100) / 100,
-      totalCGSTAmount: Number(req.body.totalCGSTAmount) || Math.round((totalGSTAmount / 2) * 100) / 100,
-      totalSGSTAmount: Number(req.body.totalSGSTAmount) || Math.round((totalGSTAmount / 2) * 100) / 100,
-      totalIGSTAmount: Number(req.body.totalIGSTAmount) || 0,
-      totalAmount: Math.round(totalAmount * 100) / 100,
+      totalTaxableValue: round2(totalTaxableValue),
+      taxType: computedTaxMeta.taxType,
+      taxLabel: computedTaxMeta.taxLabel,
+      taxSummary: computedTaxMeta.taxSummary,
+      totalTaxAmount: computedTaxMeta.totalTaxAmount,
+      totalGSTAmount: computedTaxMeta.totalGSTAmount,
+      totalCGSTAmount: computedTaxMeta.totalCGSTAmount,
+      totalSGSTAmount: computedTaxMeta.totalSGSTAmount,
+      totalIGSTAmount: computedTaxMeta.totalIGSTAmount,
+      totalAmount: round2(totalAmount),
       valueInWords: req.body.valueInWords || `${totalAmount} only`,
 
       notes,
@@ -227,6 +287,7 @@ export const updatePurchaseOrder = async (req, res, next) => {
     }
 
     const oldPO = await getPurchaseOrderByIdRepo(id);
+    const company = oldPO?.companyId ? await findCompanyByIdRepo(oldPO.companyId) : null;
 
     // Keep billingModel in sync with paymentTerms
     if (updateData.paymentTerms && !updateData.billingModel) {
@@ -244,10 +305,36 @@ export const updatePurchaseOrder = async (req, res, next) => {
 
     // Normalize hsnId to String on items
     if (Array.isArray(updateData.items)) {
+      const gstSplit =
+        getCompanyBasedGstSplit(company, updateData.vendor || oldPO.vendor) ||
+        getGstSplit(updateData.vendor || oldPO.vendor, updateData.deliverTo || oldPO.deliverTo);
       updateData.items = updateData.items.map((item) => ({
         ...item,
         hsnId: item.hsnId ? String(item.hsnId) : undefined,
+        ...normalizeLineItemTax(item, {
+          taxType: updateData.taxType,
+          taxLabel: updateData.taxLabel,
+          gstSplit,
+        }),
       }));
+    }
+
+    if (Array.isArray(updateData.items) || Array.isArray(updateData.taxSummary)) {
+      const taxMeta = buildTaxMeta({
+        taxType: updateData.taxType || oldPO.taxType,
+        taxLabel: updateData.taxLabel || oldPO.taxLabel,
+        taxSummary: updateData.taxSummary,
+        totalTaxAmount: updateData.totalTaxAmount,
+        items: updateData.items || oldPO.items || [],
+      });
+      updateData.taxType = taxMeta.taxType;
+      updateData.taxLabel = taxMeta.taxLabel;
+      updateData.taxSummary = taxMeta.taxSummary;
+      updateData.totalTaxAmount = taxMeta.totalTaxAmount;
+      updateData.totalGSTAmount = taxMeta.totalGSTAmount;
+      updateData.totalCGSTAmount = taxMeta.totalCGSTAmount;
+      updateData.totalSGSTAmount = taxMeta.totalSGSTAmount;
+      updateData.totalIGSTAmount = taxMeta.totalIGSTAmount;
     }
 
     const updatedPO = await updatePurchaseOrderRepo(id, {

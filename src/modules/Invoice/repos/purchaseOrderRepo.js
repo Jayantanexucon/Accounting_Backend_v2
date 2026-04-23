@@ -1,5 +1,10 @@
 import AppError from "../../../utils/AppError.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
+import {
+  buildTaxMeta,
+  normalizeLineItemTax,
+  round2,
+} from "../utils/taxNormalization.js";
 
 // Helper: Recalculate totalAmount for items if missing (data stored before fix)
 const recalculateItemTotals = (po) => {
@@ -14,8 +19,26 @@ const recalculateItemTotals = (po) => {
     }
 
     // ── Recalculate totals ──────────────────────────────────────
-    if ((item.totalAmount === 0 || !item.totalAmount) && (item.taxableValue || item.gstAmount)) {
-      item.totalAmount = Number(item.taxableValue || 0) + Number(item.gstAmount || 0);
+    const normalizedTax = normalizeLineItemTax(item, {
+      taxType: po.taxType,
+      taxLabel: po.taxLabel,
+    });
+    const computedTotalAmount =
+      Number(item.totalAmount || 0) ||
+      round2(Number(item.taxableValue || 0) + Number(normalizedTax.taxAmount || 0));
+
+    if (item.taxType !== normalizedTax.taxType ||
+        item.taxLabel !== normalizedTax.taxLabel ||
+        Number(item.taxRate ?? item.gstRate ?? 0) !== normalizedTax.taxRate ||
+        Number(item.taxAmount ?? item.gstAmount ?? 0) !== normalizedTax.taxAmount ||
+        Number(item.combinedTaxRate || 0) !== normalizedTax.combinedTaxRate ||
+        JSON.stringify(item.taxBreakdown || []) !== JSON.stringify(normalizedTax.taxBreakdown || [])) {
+      Object.assign(item, normalizedTax);
+      recalculated = true;
+    }
+
+    if ((item.totalAmount === 0 || !item.totalAmount) && (item.taxableValue || normalizedTax.taxAmount)) {
+      item.totalAmount = computedTotalAmount;
       recalculated = true;
     }
     return item;
@@ -24,19 +47,26 @@ const recalculateItemTotals = (po) => {
   // Recalculate PO-level totals if items were recalculated
   if (recalculated) {
     const totalTaxableValue = items.reduce((sum, item) => sum + Number(item.taxableValue || 0), 0);
-    const totalGSTAmount = items.reduce((sum, item) => sum + Number(item.gstAmount || 0), 0);
     const totalAmount = items.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
+    const taxMeta = buildTaxMeta({
+      taxType: po.taxType,
+      taxLabel: po.taxLabel,
+      taxSummary: po.taxSummary,
+      totalTaxAmount: po.totalTaxAmount,
+      items,
+    });
 
     po.items = items;
-    po.totalTaxableValue = Math.round(totalTaxableValue * 100) / 100;
-    po.totalGSTAmount = Math.round(totalGSTAmount * 100) / 100;
-    po.totalAmount = Math.round(totalAmount * 100) / 100;
-    
-    // Recalculate CGST/SGST/IGST if empty
-    if (!po.totalCGSTAmount && !po.totalSGSTAmount && po.totalGSTAmount > 0) {
-      po.totalCGSTAmount = Math.round((totalGSTAmount / 2) * 100) / 100;
-      po.totalSGSTAmount = Math.round((totalGSTAmount / 2) * 100) / 100;
-    }
+    po.totalTaxableValue = round2(totalTaxableValue);
+    po.taxType = taxMeta.taxType;
+    po.taxLabel = taxMeta.taxLabel;
+    po.taxSummary = taxMeta.taxSummary;
+    po.totalTaxAmount = taxMeta.totalTaxAmount;
+    po.totalGSTAmount = taxMeta.totalGSTAmount;
+    po.totalCGSTAmount = taxMeta.totalCGSTAmount;
+    po.totalSGSTAmount = taxMeta.totalSGSTAmount;
+    po.totalIGSTAmount = taxMeta.totalIGSTAmount;
+    po.totalAmount = round2(totalAmount);
   }
 
   return po;
