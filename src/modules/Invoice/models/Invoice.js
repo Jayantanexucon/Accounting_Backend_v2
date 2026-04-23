@@ -1,6 +1,16 @@
 import mongoose from "mongoose";
 import { getDatabase } from "../../../config/databases.js";
 
+const taxBreakdownSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, default: "GST" },
+    label: { type: String, default: "GST" },
+    rate: { type: Number, default: 0, min: 0 },
+    amount: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
 const invoiceLineItemSchema = new mongoose.Schema({
   itemId: { type: String },
   poItemId: { type: String },
@@ -9,6 +19,12 @@ const invoiceLineItemSchema = new mongoose.Schema({
   quantity: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },
   taxableValue: { type: Number, required: true, min: 0 },
+  taxType: { type: String, default: "GST" },
+  taxLabel: { type: String, default: "GST" },
+  taxRate: { type: Number, default: 0, min: 0 },
+  taxAmount: { type: Number, default: 0, min: 0 },
+  combinedTaxRate: { type: Number, default: 0, min: 0 },
+  taxBreakdown: { type: [taxBreakdownSchema], default: [] },
   gstRate: { type: Number, default: 0, min: 0 },
   gstAmount: { type: Number, default: 0, min: 0 },
   cgstAmount: { type: Number, default: 0, min: 0 },
@@ -17,12 +33,16 @@ const invoiceLineItemSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true, min: 0 },
 });
 
-const addressSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  address: { type: String },
-  stateCode: { type: String },
-  gstin: { type: String },
-});
+const addressSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    address: { type: String },
+    stateCode: { type: String },
+    GSTIN: { type: String },
+    gstin: { type: String },
+  },
+  { _id: false }
+);
 
 // Milestone schema for milestone-based invoicing
 const invoiceMilestoneSchema = new mongoose.Schema({
@@ -116,6 +136,10 @@ const invoiceSchema = new mongoose.Schema(
 
     // Financial Totals
     totalTaxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxSummary: { type: [taxBreakdownSchema], default: [] },
+    totalTaxAmount: { type: Number, default: 0, min: 0 },
     totalCGSTAmount: { type: Number, default: 0, min: 0 },
     totalSGSTAmount: { type: Number, default: 0, min: 0 },
     totalIGSTAmount: { type: Number, default: 0, min: 0 },

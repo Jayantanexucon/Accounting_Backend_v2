@@ -1,5 +1,10 @@
 import { getCountryTaxModel } from "../models/CountryTax.js";
+import { getCountryModel } from "../models/Country.js";
 import AppError from "../../../utils/AppError.js";
+
+const ensureCountryModelRegistered = async () => {
+  await getCountryModel();
+};
 
 export const createCountryTaxRepo = async (data) => {
   try {
@@ -13,6 +18,7 @@ export const createCountryTaxRepo = async (data) => {
 
 export const getAllCountryTaxRepo = async () => {
   try {
+    await ensureCountryModelRegistered();
     const CountryTax = await getCountryTaxModel();
     return await CountryTax.find({}).sort({ countryName: 1 }).populate("countryId", "countryName countryCode taxConfig");
   } catch (error) {
@@ -22,6 +28,7 @@ export const getAllCountryTaxRepo = async () => {
 
 export const findCountryTaxByIdRepo = async (id) => {
   try {
+    await ensureCountryModelRegistered();
     const CountryTax = await getCountryTaxModel();
     return await CountryTax.findById(id).populate("countryId", "countryName countryCode taxConfig");
   } catch (error) {
@@ -40,6 +47,7 @@ export const findCountryTaxByCodeRepo = async (countryCode) => {
 
 export const updateCountryTaxRepo = async (id, data, updatedBy) => {
   try {
+    await ensureCountryModelRegistered();
     const CountryTax = await getCountryTaxModel();
 
     // 1. Find existing record to create snapshot

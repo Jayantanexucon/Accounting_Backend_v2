@@ -5,6 +5,16 @@ import { getDatabase } from "../../../config/databases.js";
 // hsnId stored as plain String — HSN lives in a different database,
 // so we cannot use ObjectId ref across DB connections.
 // The full hsnSac code and gstRate are stored directly on the item.
+const taxBreakdownSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, default: "GST" },
+    label: { type: String, default: "GST" },
+    rate: { type: Number, default: 0, min: 0 },
+    amount: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
 const poLineItemSchema = new mongoose.Schema(
   {
     itemId: { type: String },
@@ -19,8 +29,17 @@ const poLineItemSchema = new mongoose.Schema(
     },   // Unit of measurement — can be "each" or "hour"
     rate: { type: Number, required: true, min: 0 },
     taxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxRate: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    combinedTaxRate: { type: Number, default: 0, min: 0 },
+    taxBreakdown: { type: [taxBreakdownSchema], default: [] },
     gstRate: { type: Number, default: 0, min: 0 },
     gstAmount: { type: Number, default: 0, min: 0 },
+    cgstAmount: { type: Number, default: 0, min: 0 },
+    sgstAmount: { type: Number, default: 0, min: 0 },
+    igstAmount: { type: Number, default: 0, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     invoicedQuantity: { type: Number, default: 0, min: 0 },
     invoicedAmount: { type: Number, default: 0, min: 0 },
@@ -158,6 +177,10 @@ const purchaseOrderSchema = new mongoose.Schema(
     attendanceRecords: { type: [attendanceRecordSchema], default: [] },
 
     totalTaxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxSummary: { type: [taxBreakdownSchema], default: [] },
+    totalTaxAmount: { type: Number, default: 0, min: 0 },
     totalGSTAmount: { type: Number, default: 0, min: 0 },
     totalCGSTAmount: { type: Number, default: 0, min: 0 },
     totalSGSTAmount: { type: Number, default: 0, min: 0 },

@@ -23,6 +23,7 @@ import { createJournalRepo } from "../../Account/repos/journalRepo.js";
 import { getAccountsRepo } from "../../Account/repos/accountRepo.js";
 import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
+import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
 import { exportInvoice, exportInvoiceList } from "../services/invoiceExportService.js";
 import {
   sendInvoiceCreatedNotification,
@@ -30,6 +31,11 @@ import {
   sendInvoiceRejectedNotification,
   sendPaymentRecordedNotification,
 } from "../services/notificationService.js";
+import {
+  buildTaxMeta,
+  normalizeLineItemTax,
+  round2,
+} from "../utils/taxNormalization.js";
 
 const generateInvoiceNumber = async (companyId) => {
   const timestamp = Date.now();
@@ -39,6 +45,78 @@ const generateInvoiceNumber = async (companyId) => {
 const generateJournalNumber = (companyId) => {
   const timestamp = Date.now();
   return `JRN-${companyId.toString().slice(-4)}-${timestamp}`;
+};
+
+const normalizeStateCode = (value = "") => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const digitMatch = normalized.match(/^(\d{2})/);
+  if (digitMatch) return digitMatch[1];
+  const alphaMatch = normalized.match(/^([A-Z]{2})/);
+  return alphaMatch ? alphaMatch[1] : normalized;
+};
+
+const getGstSplit = (fromAddress = {}, toAddress = {}) => {
+  const fromStateCode = normalizeStateCode(fromAddress?.stateCode);
+  const toStateCode = normalizeStateCode(toAddress?.stateCode);
+
+  if (!fromStateCode || !toStateCode) return undefined;
+  return fromStateCode === toStateCode ? "INTRA" : "INTER";
+};
+
+const getCompanyStateCode = (company = {}) =>
+  normalizeStateCode(company?.taxDetails?.gstin || company?.registeredAddress?.stateCode);
+
+const getPartyStateCode = (party = {}) =>
+  normalizeStateCode(party?.GSTIN || party?.gstin || party?.stateCode);
+
+const getCompanyBasedGstSplit = (company = {}, party = {}) => {
+  const companyStateCode = getCompanyStateCode(company);
+  const partyStateCode = getPartyStateCode(party);
+
+  if (!companyStateCode || !partyStateCode) return undefined;
+  return companyStateCode === partyStateCode ? "INTRA" : "INTER";
+};
+
+const findTaxPayableAccount = (accounts = [], preferredType = "GST") => {
+  const normalizedType = String(preferredType || "GST").trim().toUpperCase();
+  const desiredName = `${normalizedType.toLowerCase()} payable`;
+
+  return (
+    accounts.find((acc) => acc.name?.toLowerCase() === desiredName) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes(desiredName)) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes(`${normalizedType.toLowerCase()} output`)) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes("gst payable")) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes("output gst")) ||
+    accounts.find((acc) => acc.name?.toLowerCase() === "gst") ||
+    null
+  );
+};
+
+const getMatchedPoItem = (po, item = {}) => {
+  const poItems = Array.isArray(po?.items) ? po.items : [];
+  const requestedKeys = [
+    item.poItemId,
+    item.itemId,
+    item._id?.toString?.(),
+    item.description,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+
+  return (
+    poItems.find((poItem) => {
+      const poKeys = [
+        poItem.itemId,
+        poItem._id?.toString?.(),
+        poItem.description,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase());
+
+      return requestedKeys.some((key) => poKeys.includes(key));
+    }) || null
+  );
 };
 
 const ensureSalesJournalForInvoice = async (invoice, userId) => {
@@ -59,14 +137,7 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
   
   // Find Sales Account
   const salesAccount = accounts.find(acc => acc.name.toLowerCase().includes("sales"));
-  
-  // Find GST Payable Account
-  const gstAccount = accounts.find(acc => 
-    acc.name.toLowerCase().includes("gst payable") || 
-    acc.name.toLowerCase().includes("output gst") ||
-    acc.name.toLowerCase() === "gst"
-  );
-  
+
   // Find TDS Receivable Account
   const tdsAccount = accounts.find(acc => 
     acc.name.toLowerCase().includes("tds receivable") || 
@@ -82,6 +153,9 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
 
   const taxableValue = Number(invoice.totalTaxableValue || 0);
   const totalGST = Number(invoice.totalGSTAmount || 0);
+  const totalCGST = Number(invoice.totalCGSTAmount || 0);
+  const totalSGST = Number(invoice.totalSGSTAmount || 0);
+  const totalIGST = Number(invoice.totalIGSTAmount || 0);
   const tdsAmount = Number(invoice.tdsAmount || 0);
   // Net Receivable = Taxable + GST - TDS
   const netReceivable = taxableValue + totalGST - tdsAmount;
@@ -162,8 +236,19 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
       });
     }
 
-    // Cr. GST Payable
-    if (totalGST > 0 && gstAccount) {
+    const taxLines = [
+      { type: "CGST", amount: totalCGST },
+      { type: "SGST", amount: totalSGST },
+      { type: "IGST", amount: totalIGST },
+    ].filter((entry) => entry.amount > 0);
+
+    if (taxLines.length === 0 && totalGST > 0) {
+      taxLines.push({ type: "GST", amount: totalGST });
+    }
+
+    for (const taxLine of taxLines) {
+      const gstAccount = findTaxPayableAccount(accounts, taxLine.type);
+      if (!gstAccount) continue;
       journalLines.push({
         journalId: journal._id,
         accountId: gstAccount._id,
@@ -171,8 +256,8 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
         accountName: gstAccount.name,
         companyId: String(invoice.companyId),
         debitAmount: 0,
-        creditAmount: totalGST,
-        description: `GST payable on INV ${invoice.invoiceNo}`,
+        creditAmount: taxLine.amount,
+        description: `${taxLine.type} payable on INV ${invoice.invoiceNo}`,
         lineNumber: lineNumber++,
       });
     }
@@ -201,6 +286,10 @@ export const createInvoice = async (req, res, next) => {
       totalSGSTAmount: bodySGST,
       totalIGSTAmount: bodyIGST,
       totalGSTAmount: bodyGST,
+      totalTaxAmount: bodyTotalTaxAmount,
+      taxType: bodyTaxType,
+      taxLabel: bodyTaxLabel,
+      taxSummary: bodyTaxSummary,
       invoiceAmount: bodyInvoiceAmount,
       tdsAmount: bodyTDS,
       netPayable: bodyNetPayable,
@@ -215,20 +304,54 @@ export const createInvoice = async (req, res, next) => {
       );
     }
 
-    let totalTaxableValue = 0;
-    let totalCGSTAmount = 0;
-    let totalSGSTAmount = 0;
-    let totalIGSTAmount = 0;
-    let totalGSTAmount = 0;
-    let invoiceAmount = 0;
+    const [linkedPOData, company] = await Promise.all([
+      linkedPO ? getPurchaseOrderByIdRepo(linkedPO) : Promise.resolve(null),
+      companyId ? findCompanyByIdRepo(companyId) : Promise.resolve(null),
+    ]);
+    const gstSplit =
+      getCompanyBasedGstSplit(company, linkedPOData?.vendor || billTo) ||
+      getGstSplit(linkedPOData?.vendor || billTo, linkedPOData?.deliverTo || shipTo);
 
-    items.forEach((item) => {
-      totalTaxableValue += item.taxableValue || 0;
-      totalCGSTAmount += item.cgstAmount || 0;
-      totalSGSTAmount += item.sgstAmount || 0;
-      totalIGSTAmount += item.igstAmount || 0;
-      totalGSTAmount += item.gstAmount || 0;
-      invoiceAmount += item.totalAmount || 0;
+    let totalTaxableValue = 0;
+    let invoiceAmount = 0;
+    const normalizedItems = items.map((item) => {
+      const matchedPOItem = getMatchedPoItem(linkedPOData, item);
+      const sourceItem = {
+        ...(matchedPOItem || {}),
+        ...item,
+      };
+      const normalizedTax = normalizeLineItemTax(sourceItem, {
+        taxType: bodyTaxType || linkedPOData?.taxType || matchedPOItem?.taxType,
+        taxLabel: bodyTaxLabel || linkedPOData?.taxLabel || matchedPOItem?.taxLabel,
+        taxRate: matchedPOItem?.taxRate ?? matchedPOItem?.gstRate,
+        taxAmount: matchedPOItem?.taxAmount ?? matchedPOItem?.gstAmount,
+        gstRate: matchedPOItem?.gstRate,
+        gstAmount: matchedPOItem?.gstAmount,
+        amount: matchedPOItem?.taxAmount ?? matchedPOItem?.gstAmount,
+        rate: matchedPOItem?.taxRate ?? matchedPOItem?.gstRate,
+        gstSplit,
+      });
+      const taxableValue = Number(item.taxableValue ?? matchedPOItem?.taxableValue ?? 0);
+      const lineTotalAmount =
+        Number(item.totalAmount || item.total || 0) ||
+        round2(taxableValue + Number(normalizedTax.taxAmount || 0));
+
+      totalTaxableValue += taxableValue;
+      invoiceAmount += lineTotalAmount;
+      return {
+        ...sourceItem,
+        poItemId: item.poItemId || item.itemId || matchedPOItem?.itemId || matchedPOItem?._id,
+        totalAmount: lineTotalAmount,
+        taxableValue,
+        ...normalizedTax,
+      };
+    });
+    const taxMeta = buildTaxMeta({
+      taxType: bodyTaxType || linkedPOData?.taxType,
+      taxLabel: bodyTaxLabel || linkedPOData?.taxLabel,
+      taxSummary: bodyTaxSummary || linkedPOData?.taxSummary,
+      totalTaxAmount: bodyTotalTaxAmount ?? bodyGST,
+      items: normalizedItems,
     });
 
     const invoiceNumber = await generateInvoiceNumber(companyId);
@@ -237,20 +360,25 @@ export const createInvoice = async (req, res, next) => {
       companyId,
       invoiceNo: invoiceNumber,
       linkedPO,
+      poNumber: req.body.poNumber || linkedPOData?.poNumber,
       invoiceDate: new Date(invoiceDate),
       dueDate: new Date(dueDate),
       billTo,
       shipTo,
-      items,
-      totalTaxableValue: bodyTaxableValue ?? totalTaxableValue,
-      totalCGSTAmount: bodyCGST ?? totalCGSTAmount,
-      totalSGSTAmount: bodySGST ?? totalSGSTAmount,
-      totalIGSTAmount: bodyIGST ?? totalIGSTAmount,
-      totalGSTAmount: bodyGST ?? totalGSTAmount,
-      invoiceAmount: bodyInvoiceAmount ?? invoiceAmount,
-      amountDue: bodyInvoiceAmount ?? invoiceAmount,
-      netPayable: bodyNetPayable ?? invoiceAmount,
-      remainingAmount: bodyInvoiceAmount ?? invoiceAmount,
+      items: normalizedItems,
+      totalTaxableValue: bodyTaxableValue ?? round2(totalTaxableValue),
+      taxType: taxMeta.taxType,
+      taxLabel: taxMeta.taxLabel,
+      taxSummary: taxMeta.taxSummary,
+      totalTaxAmount: bodyTotalTaxAmount ?? taxMeta.totalTaxAmount,
+      totalCGSTAmount: bodyCGST ?? taxMeta.totalCGSTAmount,
+      totalSGSTAmount: bodySGST ?? taxMeta.totalSGSTAmount,
+      totalIGSTAmount: bodyIGST ?? taxMeta.totalIGSTAmount,
+      totalGSTAmount: bodyGST ?? taxMeta.totalGSTAmount,
+      invoiceAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
+      amountDue: bodyInvoiceAmount ?? round2(invoiceAmount),
+      netPayable: bodyNetPayable ?? round2(invoiceAmount),
+      remainingAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
       tdsAmount: bodyTDS || 0,
       valueInWords: bodyValueInWords || `${invoiceAmount} only`,
       notes,
@@ -411,9 +539,52 @@ export const updateInvoice = async (req, res, next) => {
     }
 
     const oldInvoice = await getInvoiceByIdRepo(id);
+    const [linkedPOData, company] = await Promise.all([
+      oldInvoice?.linkedPO ? getPurchaseOrderByIdRepo(oldInvoice.linkedPO) : Promise.resolve(null),
+      oldInvoice?.companyId ? findCompanyByIdRepo(oldInvoice.companyId) : Promise.resolve(null),
+    ]);
+
+    let normalizedUpdateData = { ...updateData };
+    if (Array.isArray(normalizedUpdateData.items) || Array.isArray(normalizedUpdateData.taxSummary)) {
+      if (Array.isArray(normalizedUpdateData.items)) {
+        const gstSplit =
+          getCompanyBasedGstSplit(company, normalizedUpdateData.billTo || linkedPOData?.vendor || oldInvoice.billTo) ||
+          getGstSplit(
+            linkedPOData?.vendor || normalizedUpdateData.billTo || oldInvoice.billTo,
+            linkedPOData?.deliverTo || normalizedUpdateData.shipTo || oldInvoice.shipTo,
+          );
+        normalizedUpdateData.items = normalizedUpdateData.items.map((item) => ({
+          ...item,
+          totalAmount: Number(item.totalAmount || item.total || 0),
+          ...normalizeLineItemTax(item, {
+            taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
+            taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
+            gstSplit,
+          }),
+        }));
+      }
+      const taxMeta = buildTaxMeta({
+        taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
+        taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
+        taxSummary: normalizedUpdateData.taxSummary,
+        totalTaxAmount: normalizedUpdateData.totalTaxAmount,
+        items: normalizedUpdateData.items || oldInvoice.items || [],
+      });
+      normalizedUpdateData = {
+        ...normalizedUpdateData,
+        taxType: taxMeta.taxType,
+        taxLabel: taxMeta.taxLabel,
+        taxSummary: taxMeta.taxSummary,
+        totalTaxAmount: taxMeta.totalTaxAmount,
+        totalGSTAmount: taxMeta.totalGSTAmount,
+        totalCGSTAmount: taxMeta.totalCGSTAmount,
+        totalSGSTAmount: taxMeta.totalSGSTAmount,
+        totalIGSTAmount: taxMeta.totalIGSTAmount,
+      };
+    }
 
     const updatedInvoice = await updateInvoiceRepo(id, {
-      ...updateData,
+      ...normalizedUpdateData,
       actionType: "update",
       approvalStatus: "Pending",
       updatedBy: req.user?.id,
@@ -427,7 +598,7 @@ export const updateInvoice = async (req, res, next) => {
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
-      changes: updateData,
+      changes: normalizedUpdateData,
       oldValues: oldInvoice,
       description: `Invoice updated: ${oldInvoice.invoiceNo}`,
     });
