@@ -20,6 +20,8 @@ import {
   countInvoicesRepo,
 } from "../repos/invoiceRepo.js";
 import { createJournalRepo } from "../../Account/repos/journalRepo.js";
+import { getAccountsRepo } from "../../Account/repos/accountRepo.js";
+import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
 import { exportInvoice, exportInvoiceList } from "../services/invoiceExportService.js";
 import {
@@ -44,8 +46,51 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
     return invoice?.salesJournalId || null;
   }
 
-  const journal = await createJournalRepo({
-    number: generateJournalNumber(invoice.companyId),
+  // 1. Fetch Company-specific Accounts to find the correct ledgers
+  const accounts = await getAccountsRepo({ companyId: String(invoice.companyId) });
+  
+  // Find Client Account (Accounts Receivable)
+  // We try to match by linkedClientId if available, or by name as a fallback
+  const clientAccount = accounts.find(acc => 
+    (acc.linkedClientId && String(acc.linkedClientId) === String(invoice.billTo?._id)) || 
+    (acc.partyName && acc.partyName.toLowerCase() === invoice.billTo?.name?.toLowerCase()) ||
+    (acc.name && acc.name.toLowerCase() === invoice.billTo?.name?.toLowerCase())
+  );
+  
+  // Find Sales Account
+  const salesAccount = accounts.find(acc => acc.name.toLowerCase().includes("sales"));
+  
+  // Find GST Payable Account
+  const gstAccount = accounts.find(acc => 
+    acc.name.toLowerCase().includes("gst payable") || 
+    acc.name.toLowerCase().includes("output gst") ||
+    acc.name.toLowerCase() === "gst"
+  );
+  
+  // Find TDS Receivable Account
+  const tdsAccount = accounts.find(acc => 
+    acc.name.toLowerCase().includes("tds receivable") || 
+    acc.name.toLowerCase().includes("tds on sale") ||
+    acc.name.toLowerCase() === "tds"
+  );
+
+  // If critical accounts are missing, we log but continue (or we could throw error)
+  // For now, we proceed if we have at least client and sales
+  if (!clientAccount || !salesAccount) {
+    console.warn(`[ensureSalesJournalForInvoice] Missing critical accounts for invoice ${invoice.invoiceNo}. Client Account: ${!!clientAccount}, Sales Account: ${!!salesAccount}`);
+  }
+
+  const taxableValue = Number(invoice.totalTaxableValue || 0);
+  const totalGST = Number(invoice.totalGSTAmount || 0);
+  const tdsAmount = Number(invoice.tdsAmount || 0);
+  // Net Receivable = Taxable + GST - TDS
+  const netReceivable = taxableValue + totalGST - tdsAmount;
+
+  const journalNumber = generateJournalNumber(invoice.companyId);
+
+  // 3. Create Journal Header
+  const journalData = {
+    number: journalNumber,
     voucherType: "SALES",
     date: invoice.invoiceDate || new Date(),
     referenceNumber: invoice.invoiceNo,
@@ -55,15 +100,87 @@ const ensureSalesJournalForInvoice = async (invoice, userId) => {
     sourceType: "INVOICE",
     sourceId: String(invoice._id),
     partyName: invoice.billTo?.name || "",
-    totalDebit: Number(invoice.invoiceAmount || invoice.amountDue || 0),
-    totalCredit: Number(invoice.invoiceAmount || invoice.amountDue || 0),
+    totalDebit: taxableValue + totalGST, // Total debits (Receivable + TDS)
+    totalCredit: taxableValue + totalGST, // Total credits (Sales + GST)
     status: "Approved",
     approvalStatus: "Approved",
     approvedBy: userId,
     approvalDate: new Date(),
     createdBy: userId,
     updatedBy: userId,
-  });
+  };
+
+  const journal = await createJournalRepo(journalData);
+
+  if (journal) {
+    // 4. Prepare Journal Lines
+    const journalLines = [];
+    let lineNumber = 1;
+
+    // Dr. Accounts Receivable (Net Amount)
+    if (clientAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: clientAccount._id,
+        accountCode: clientAccount.code,
+        accountName: clientAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: netReceivable,
+        creditAmount: 0,
+        description: `Receivable for INV ${invoice.invoiceNo} from ${invoice.billTo?.name}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    // Dr. TDS Receivable
+    if (tdsAmount > 0 && tdsAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: tdsAccount._id,
+        accountCode: tdsAccount.code,
+        accountName: tdsAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: tdsAmount,
+        creditAmount: 0,
+        description: `TDS deducted on INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    // Cr. Sales (Taxable Value)
+    if (salesAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: salesAccount._id,
+        accountCode: salesAccount.code,
+        accountName: salesAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: 0,
+        creditAmount: taxableValue,
+        description: `Sales revenue from INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    // Cr. GST Payable
+    if (totalGST > 0 && gstAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: gstAccount._id,
+        accountCode: gstAccount.code,
+        accountName: gstAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: 0,
+        creditAmount: totalGST,
+        description: `GST payable on INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    if (journalLines.length > 0) {
+      await createMultipleJournalLinesRepo(journalLines);
+    }
+  }
 
   return journal?._id || null;
 };
@@ -137,6 +254,7 @@ export const createInvoice = async (req, res, next) => {
       tdsAmount: bodyTDS || 0,
       valueInWords: bodyValueInWords || `${invoiceAmount} only`,
       notes,
+      actionType: "create",
       createdBy: req.user?.id,
       updatedBy: req.user?.id,
     };
@@ -177,23 +295,63 @@ export const createInvoice = async (req, res, next) => {
 
 export const getAllInvoices = async (req, res, next) => {
   try {
-    const { companyId, status, approvalStatus, startDate, endDate, page, limit } = req.query;
+    const {
+      companyId,
+      status,
+      approvalStatus,
+      startDate,
+      endDate,
+      invoiceDateFrom,
+      invoiceDateTo,
+      invoiceNo,
+      clientName,
+      paymentStatus,
+      journalPosted,
+      createdBy,
+      createdAtFrom,
+      createdAtTo,
+      salesJournalPostedAtFrom,
+      salesJournalPostedAtTo,
+      page,
+      limit,
+    } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllInvoices");
     }
 
-
     const filter = { companyId };
     if (status) filter.status = status;
     if (approvalStatus) filter.approvalStatus = approvalStatus;
 
-    if (startDate && endDate) {
-      filter.invoiceDate = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
+    // Advanced Filters
+    if (invoiceNo) filter.invoiceNo = { $regex: invoiceNo, $options: "i" };
+    if (clientName) filter["billTo.name"] = { $regex: clientName, $options: "i" };
+    if (createdBy) filter.createdBy = createdBy;
+
+    if (paymentStatus) {
+      if (paymentStatus === "fully_paid") filter.status = { $in: ["PAID", "RECONCILED"] };
+      else if (paymentStatus === "partially_paid") filter.status = "PARTIALLY_PAID";
+      else if (paymentStatus === "unpaid") filter.status = "POSTED";
     }
+
+    if (journalPosted === "yes") filter.salesJournalId = { $exists: true, $ne: null };
+    else if (journalPosted === "no") filter.salesJournalId = null;
+
+    // Date Range Filters
+    const applyDateRange = (field, from, to) => {
+      if (from || to) {
+        if (!filter[field]) filter[field] = {};
+        if (from) filter[field].$gte = new Date(from);
+        if (to) filter[field].$lte = new Date(to);
+      }
+    };
+
+    // Use specific range if available, fallback to generic startDate/endDate for invoiceDate
+    applyDateRange("invoiceDate", invoiceDateFrom || startDate, invoiceDateTo || endDate);
+    applyDateRange("createdAt", createdAtFrom, createdAtTo);
+    applyDateRange("approvalDate", salesJournalPostedAtFrom, salesJournalPostedAtTo);
+
 
     const pageNo = Math.max(1, Number(page || 1));
     const pageLimit = Math.max(0, Number(limit || 0));
@@ -256,6 +414,8 @@ export const updateInvoice = async (req, res, next) => {
 
     const updatedInvoice = await updateInvoiceRepo(id, {
       ...updateData,
+      actionType: "update",
+      approvalStatus: "Pending",
       updatedBy: req.user?.id,
     });
 

@@ -197,6 +197,11 @@ const invoiceSchema = new mongoose.Schema(
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approvalDate: { type: Date },
     approvalComments: { type: String },
+    actionType: {
+      type: String,
+      enum: ["create", "update", "delete"],
+      default: "create",
+    },
 
     notes: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
