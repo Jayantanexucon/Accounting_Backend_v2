@@ -66,6 +66,9 @@ export const getAuditLogsController = async (req, res, next) => {
       description: log.description,
       status: log.status,
       changeCount: Array.isArray(log.changes) ? log.changes.length : 0,
+      changes: log.changes || [],
+      oldValues: log.oldValues,
+      newValues: log.newValues,
     }));
 
     res.status(200).json({

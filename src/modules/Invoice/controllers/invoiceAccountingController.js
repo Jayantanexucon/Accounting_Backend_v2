@@ -100,12 +100,14 @@ const getInvoiceClientName = (invoice) =>
 const generateDocumentNumber = (prefix, companyId) =>
   `${prefix}-${normalizeCompanyId(companyId).slice(-4)}-${Date.now()}`;
 
-const getInvoiceSettlementAmount = (invoice) =>
-  Number(invoice.invoiceAmount || invoice.amountDue || 0);
+const getInvoiceSettlementAmount = (invoice) => {
+  const total = Number(invoice.invoiceAmount || invoice.amountDue || 0);
+  const tds = Number(invoice.tdsAmount || invoice.totalTDSAmount || 0);
+  return total - tds;
+};
 
 const getOutstandingAmount = (invoice) => {
-  const settledAmount = Number(invoice.paidAmount || 0) + Number(invoice.tdsAmount || 0);
-  return Math.max(0, getInvoiceSettlementAmount(invoice) - settledAmount);
+  return Math.max(0, getInvoiceSettlementAmount(invoice) - Number(invoice.paidAmount || 0));
 };
 
 const getTaxLedgerField = (invoice) => {
@@ -466,6 +468,7 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
     debtorAccountId: accounts.clientLedger.account._id,
     revenueAccountId: accounts.salesAccount.account._id,
     taxAccountId: Object.values(accounts.taxAccounts)[0]?.account?._id || null, // Primary tax account
+    netPayable: getInvoiceSettlementAmount(invoice),
     accountingStatus: "completed",
     updatedBy: userId,
   });
@@ -526,7 +529,7 @@ export const recordPaymentForInvoice = async ({
   const normalizedTdsAmount = Number(tdsAmount || 0);
   const grossAmount = normalizedAmountPaid + normalizedTdsAmount;
 
-  if (grossAmount <= 0) {
+  if (normalizedAmountPaid <= 0 && normalizedTdsAmount <= 0) {
     throw new AppError("Payment amount or TDS amount is required", 400, "recordPaymentForInvoice");
   }
 
@@ -613,7 +616,7 @@ export const recordPaymentForInvoice = async ({
     accountCode: accounts.clientLedger.account.code,
     accountName: accounts.clientLedger.account.name,
     debitAmount: 0,
-    creditAmount: normalizedAmountPaid,
+    creditAmount: grossAmount,
     description: `Receivable settlement for ${invoice.invoiceNo}`,
     linkedToClientId: clientId || invoice.billTo?.clientId || null,
   });
@@ -661,17 +664,16 @@ export const recordPaymentForInvoice = async ({
     updatedBy: userId,
   });
 
+  const newRemaining = Math.max(0, getOutstandingAmount(invoice) - normalizedAmountPaid);
+  const totalSettled = Number(invoice.paidAmount || 0) + normalizedAmountPaid + Number(invoice.tdsAmount || 0) + normalizedTdsAmount;
+  
   const updatedInvoice = await updateInvoiceRepo(invoice._id, {
     paidAmount: Number(invoice.paidAmount || 0) + normalizedAmountPaid,
     tdsAmount: Number(invoice.tdsAmount || 0) + normalizedTdsAmount,
-    remainingAmount: Math.max(0, getOutstandingAmount(invoice) - grossAmount),
-    status:
-      Math.max(0, getOutstandingAmount(invoice) - grossAmount) === 0
-        ? "PAID"
-        : Number(invoice.paidAmount || 0) + normalizedAmountPaid + Number(invoice.tdsAmount || 0) + normalizedTdsAmount > 0
-          ? "PARTIALLY_PAID"
-          : invoice.status,
-    isFullyPaid: Math.max(0, getOutstandingAmount(invoice) - grossAmount) === 0,
+    netPayable: getInvoiceSettlementAmount(invoice),
+    remainingAmount: newRemaining,
+    status: newRemaining < 0.01 ? "PAID" : totalSettled > 0 ? "PARTIALLY_PAID" : invoice.status,
+    isFullyPaid: newRemaining < 0.01,
     paymentIds: [
       ...((invoice.paymentIds || []).map((payment) =>
         typeof payment === "object" && payment !== null ? payment._id : payment

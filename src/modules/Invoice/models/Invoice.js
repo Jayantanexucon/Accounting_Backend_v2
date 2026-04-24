@@ -244,7 +244,10 @@ invoiceSchema.index({ linkedPO: 1, status: 1 });
 
 // Pre-save hook to calculate remainingAmount
 invoiceSchema.pre("save", function () {
-  this.remainingAmount = Math.max(0, (this.invoiceAmount || 0) - (this.paidAmount || 0));
+  this.remainingAmount = Math.max(
+    0,
+    (this.invoiceAmount || 0) - (this.paidAmount || 0) - (this.tdsAmount || 0)
+  );
   this.isFullyPaid = this.remainingAmount === 0;
   this.updatedAt = new Date();
 });
