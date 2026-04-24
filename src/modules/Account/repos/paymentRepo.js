@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import AppError from "../../../utils/AppError.js";
 import { getPaymentModel } from "../models/Payment.js";
 
@@ -195,5 +196,25 @@ export const getTDSReportDataRepo = async (companyId, startDate, endDate) => {
       500,
       "getTDSReportDataRepo"
     );
+  }
+};
+
+export const getDetailedTDSReportRepo = async (companyId, fromDate, toDate) => {
+  try {
+    const Payment = await getPaymentModel();
+    const query = {
+      companyId: new mongoose.Types.ObjectId(companyId),
+      tdsAmount: { $gt: 0 }
+    };
+    if (fromDate || toDate) {
+      query.paymentDate = {};
+      if (fromDate) query.paymentDate.$gte = new Date(fromDate);
+      if (toDate) query.paymentDate.$lte = new Date(toDate);
+    }
+
+    const payments = await Payment.find(query).sort({ paymentDate: -1 }).lean();
+    return payments;
+  } catch (error) {
+    throw new AppError(error.message || "Error retrieving detailed TDS report", 500, "getDetailedTDSReportRepo");
   }
 };

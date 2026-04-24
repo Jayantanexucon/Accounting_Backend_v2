@@ -214,7 +214,8 @@ export const createPurchaseOrder = async (req, res, next) => {
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
-      changes: poData,
+      changes: [],
+      newValues: po,
       description: `Purchase Order created: ${po.poNumber}`,
     });
 
@@ -342,6 +343,18 @@ export const updatePurchaseOrder = async (req, res, next) => {
       updatedBy: req.user?.id ? String(req.user.id) : undefined,
     });
 
+    // Compute changes for audit log
+    const changes = [];
+    Object.keys(updateData).forEach(key => {
+      if (JSON.stringify(oldPO[key]) !== JSON.stringify(updateData[key])) {
+        changes.push({
+          field: key,
+          oldValue: oldPO[key],
+          newValue: updateData[key],
+        });
+      }
+    });
+
     await createAuditLog({
       companyId: oldPO.companyId,
       entityType: "PurchaseOrder",
@@ -350,8 +363,9 @@ export const updatePurchaseOrder = async (req, res, next) => {
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
-      changes: updateData,
+      changes: changes,
       oldValues: oldPO,
+      newValues: updatedPO,
       description: `Purchase Order updated: ${oldPO.poNumber}`,
     });
 
@@ -385,7 +399,8 @@ export const deletePurchaseOrder = async (req, res, next) => {
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
-      changes: po,
+      changes: [],
+      oldValues: po,
       description: `Purchase Order deleted: ${po.poNumber}`,
     });
 
