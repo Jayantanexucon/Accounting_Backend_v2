@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import AppError from "../../../utils/AppError.js";
 import { getInvoiceModel } from "../models/Invoice.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
@@ -302,5 +303,27 @@ export const updateInvoiceAccountingStatusRepo = async (invoiceId, journalId, st
       500,
       "updateInvoiceAccountingStatusRepo"
     );
+  }
+};
+
+export const getInvoicesWithTDSRepo = async (companyId, fromDate, toDate) => {
+  try {
+    const Invoice = await getInvoiceModel();
+    const query = {
+      companyId: new mongoose.Types.ObjectId(companyId),
+      $or: [
+        { tdsAmount: { $gt: 0 } },
+        { totalTDSAmount: { $gt: 0 } }
+      ]
+    };
+    if (fromDate || toDate) {
+      query.invoiceDate = {};
+      if (fromDate) query.invoiceDate.$gte = new Date(fromDate);
+      if (toDate) query.invoiceDate.$lte = new Date(toDate);
+    }
+
+    return await Invoice.find(query).sort({ invoiceDate: -1 }).lean();
+  } catch (error) {
+    throw new AppError(error.message || "Error retrieving invoices with TDS", 500, "getInvoicesWithTDSRepo");
   }
 };

@@ -2,8 +2,8 @@ import mongoose from "mongoose";
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
-import { getInvoiceByIdRepo, updateInvoiceRepo } from "../repos/invoiceRepo.js";
-import { getPaymentsByInvoiceRepo, createPaymentRepo } from "../../Account/repos/paymentRepo.js";
+import { getInvoiceByIdRepo, updateInvoiceRepo, getInvoicesWithTDSRepo } from "../repos/invoiceRepo.js";
+import { getPaymentsByInvoiceRepo, createPaymentRepo, getDetailedTDSReportRepo } from "../../Account/repos/paymentRepo.js";
 import { createJournalRepo, getJournalByIdRepo } from "../../Account/repos/journalRepo.js";
 import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
 import { getAccountModel } from "../../Account/models/Account.js";
@@ -1001,6 +1001,83 @@ export const recordInvoicePayment = async (req, res, next) => {
       statusCode: 201,
       data: result,
       message: "Payment posted successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getInvoiceTdsReport = async (req, res, next) => {
+  try {
+    const { companyId } = req.params;
+    const { fromDate, toDate } = req.query;
+
+    // 1. Get TDS from payments (Realized TDS)
+    const payments = await getDetailedTDSReportRepo(companyId, fromDate, toDate);
+    
+    // 2. Get TDS from invoices (Provisioned TDS at Sales Posting)
+    const invoicesWithTds = await getInvoicesWithTDSRepo(companyId, fromDate, toDate);
+
+    const reportRows = [];
+
+    // Process payment TDS
+    for (const payment of payments) {
+      try {
+        const invoice = await getInvoiceByIdRepo(payment.invoiceId);
+        reportRows.push({
+          invoiceNo: invoice?.invoiceNo || "N/A",
+          clientName: invoice?.billTo?.name || "N/A",
+          paymentDate: payment.paymentDate,
+          reference: payment.reference || "Payment Adjustment",
+          receivedAmount: Number(payment.amountPaid || 0),
+          tdsAmount: Number(payment.tdsAmount || 0),
+          settledAmount: Number(payment.grossAmount || (payment.amountPaid + payment.tdsAmount)),
+          type: "PAYMENT",
+        });
+      } catch (err) {
+        // Fallback if invoice not found
+        reportRows.push({
+          invoiceNo: "N/A",
+          clientName: "N/A",
+          paymentDate: payment.paymentDate || new Date(),
+          reference: payment.reference || "Payment Adjustment",
+          receivedAmount: Number(payment.amountPaid || 0),
+          tdsAmount: Number(payment.tdsAmount || 0),
+          settledAmount: Number(payment.grossAmount || (payment.amountPaid + payment.tdsAmount)),
+          type: "PAYMENT",
+        });
+      }
+    }
+
+    // Process invoice TDS (if not already covered by a payment record that includes TDS)
+    // In this system, if TDS is booked at Sales Posting, it's tracked in invoice.tdsAmount.
+    // If it's deducted at Payment time, it's in payment.tdsAmount.
+    for (const invoice of invoicesWithTds) {
+      // Avoid double counting: if this invoice has payments that already carry TDS,
+      // we should be careful. But usually, if invoice.tdsAmount > 0, it means it was provisioned.
+      // We'll show it as a "Provisioned" entry.
+      
+      // Check if we already have a payment for this invoice that might have "collected" this same TDS.
+      // But typically, provisioned TDS is a separate ledger entry from payment-time TDS.
+      reportRows.push({
+        invoiceNo: invoice.invoiceNo,
+        clientName: invoice.billTo?.name || "N/A",
+        paymentDate: invoice.invoiceDate || invoice.createdAt || new Date(),
+        reference: "Sales Posting (Provision)",
+        receivedAmount: 0,
+        tdsAmount: Number(invoice.tdsAmount || invoice.totalTDSAmount || 0),
+        settledAmount: Number(invoice.tdsAmount || invoice.totalTDSAmount || 0),
+        type: "INVOICE_PROVISION",
+      });
+    }
+
+    // Sort by date descending
+    reportRows.sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
+
+    new ApiResponse({
+      statusCode: 200,
+      data: reportRows,
+      message: "TDS report retrieved successfully",
     }).send(res);
   } catch (error) {
     next(error);

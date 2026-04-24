@@ -8,6 +8,7 @@ import {
   completeInvoiceAccounting,
   getInvoiceAccountingStatus,
   recordInvoicePayment,
+  getInvoiceTdsReport,
 } from "../controllers/invoiceAccountingController.js";
 
 const router = express.Router();
@@ -48,6 +49,11 @@ router.post(
   "/:companyId/record-payment",
   accessControlMiddleware({ entityKey: "PAYMENT", action: "CREATE" }),
   recordInvoicePayment
+);
+router.get(
+  "/:companyId/tds-report",
+  accessControlMiddleware({ entityKey: "INVOICE", action: "VIEW" }),
+  getInvoiceTdsReport
 );
 
 export default router;
