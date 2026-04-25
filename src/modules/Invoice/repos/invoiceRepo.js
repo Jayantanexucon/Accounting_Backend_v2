@@ -42,7 +42,7 @@ export const getInvoiceByIdRepo = async (id) => {
     const Payment = await getPaymentModel();
 
     const invoice = await Invoice.findById(id)
-      .populate({ path: "linkedPO", select: "poNumber poDate vendor", model: PurchaseOrder })
+      .populate({ path: "linkedPO", select: "poNumber poDate vendor poreferencevalue paymentTerms deliveryDate", model: PurchaseOrder })
       .populate({ path: "salesJournalId", model: Journal })
       .populate({ path: "debtorAccountId", model: Account })
       .populate({ path: "revenueAccountId", model: Account })
