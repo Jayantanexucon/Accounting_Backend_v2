@@ -124,6 +124,12 @@ export const createPurchaseOrder = async (req, res, next) => {
             taxableValue,
             totalAmount: totalAmountValue,
             ...normalizedTax,
+            // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
+            taxRate: normalizedTax.taxRate,
+            taxAmount: normalizedTax.taxAmount,
+            gstRate: normalizedTax.gstRate,
+            gstAmount: normalizedTax.gstAmount,
+            combinedTaxRate: normalizedTax.combinedTaxRate,
           };
         })
       : [];
@@ -131,8 +137,8 @@ export const createPurchaseOrder = async (req, res, next) => {
     const computedTaxMeta = buildTaxMeta({
       taxType: req.body.taxType,
       taxLabel: req.body.taxLabel,
-      taxSummary: req.body.taxSummary,
-      totalTaxAmount: req.body.totalTaxAmount,
+      taxSummary: undefined, // Let it recalculate from items
+      totalTaxAmount: undefined, // ← Don't pass frontend value, recalculate from items
       items: normalizedItems,
     });
 
@@ -304,29 +310,63 @@ export const updatePurchaseOrder = async (req, res, next) => {
       }));
     }
 
-    // Normalize hsnId to String on items
+    // Normalize hsnId to String on items and recalculate totals
+    let totalTaxableValue = 0;
+    let totalAmount = 0;
+    
     if (Array.isArray(updateData.items)) {
       const gstSplit =
         getCompanyBasedGstSplit(company, updateData.vendor || oldPO.vendor) ||
         getGstSplit(updateData.vendor || oldPO.vendor, updateData.deliverTo || oldPO.deliverTo);
-      updateData.items = updateData.items.map((item) => ({
-        ...item,
-        hsnId: item.hsnId ? String(item.hsnId) : undefined,
-        ...normalizeLineItemTax(item, {
-          taxType: updateData.taxType,
-          taxLabel: updateData.taxLabel,
+      
+      updateData.items = updateData.items.map((item) => {
+        const normalizedTax = normalizeLineItemTax(item, {
+          taxType: updateData.taxType || oldPO.taxType,
+          taxLabel: updateData.taxLabel || oldPO.taxLabel,
           gstSplit,
-        }),
-      }));
+        });
+        
+        const taxableValue = Number(item.taxableValue) || 0;
+        const totalAmountValue =
+          Number(item.totalAmount) ||
+          Number(item.total) ||
+          taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
+          0;
+
+        totalTaxableValue += taxableValue;
+        totalAmount += totalAmountValue;
+
+        return {
+          ...item,
+          hsnId: item.hsnId ? String(item.hsnId) : undefined,
+          taxableValue,
+          totalAmount: totalAmountValue,
+          ...normalizedTax,
+          // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
+          // These override any stale values from the request item
+          taxRate: normalizedTax.taxRate,
+          taxAmount: normalizedTax.taxAmount,
+          gstRate: normalizedTax.gstRate,
+          gstAmount: normalizedTax.gstAmount,
+          combinedTaxRate: normalizedTax.combinedTaxRate,
+        };
+      });
+
+      // Update totals in updateData so they get saved
+      updateData.totalTaxableValue = round2(totalTaxableValue);
+      updateData.totalAmount = round2(totalAmount);
     }
 
-    if (Array.isArray(updateData.items) || Array.isArray(updateData.taxSummary)) {
+    // ── FIX: Always rebuild tax meta from items when items are present ──
+    // This ensures PO-level totals (totalTaxAmount, totalCGSTAmount, etc.) are recalculated
+    // and not left stale from previous save.
+    if (Array.isArray(updateData.items)) {
       const taxMeta = buildTaxMeta({
         taxType: updateData.taxType || oldPO.taxType,
         taxLabel: updateData.taxLabel || oldPO.taxLabel,
-        taxSummary: updateData.taxSummary,
-        totalTaxAmount: updateData.totalTaxAmount,
-        items: updateData.items || oldPO.items || [],
+        taxSummary: undefined, // Don't pass old summary, let it rebuild from items
+        totalTaxAmount: undefined, // ← CRITICAL: Don't pass old amount, let it recalculate from items
+        items: updateData.items || [], // Use freshly recalculated items
       });
       updateData.taxType = taxMeta.taxType;
       updateData.taxLabel = taxMeta.taxLabel;
