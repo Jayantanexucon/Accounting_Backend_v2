@@ -31,19 +31,21 @@ export const getAllHSNRepo = async () => {
   }
 };
 
-export const updateHSNRepo = async (id, companyId, data) => {
+export const updateHSNRepo = async (id, data) => {
   try {
     const HSN = await getHSNModel();
-    return await HSN.findOneAndUpdate({ _id: id, companyId }, data, { new: true, runValidators: true });
+    // HSN is treated as global master data, so update by HSN id only.
+    return await HSN.findOneAndUpdate({ _id: id }, data, { new: true, runValidators: true });
   } catch (error) {
     throw new AppError(error.message, 500, "updateHSNRepo");
   }
 };
 
-export const deleteHSNRepo = async (id, companyId) => {
+export const deleteHSNRepo = async (id) => {
   try {
     const HSN = await getHSNModel();
-    return await HSN.findOneAndDelete({ _id: id, companyId });
+    // HSN is treated as global master data, so delete by HSN id only.
+    return await HSN.findOneAndDelete({ _id: id });
   } catch (error) {
     throw new AppError(error.message, 500, "deleteHSNRepo");
   }
