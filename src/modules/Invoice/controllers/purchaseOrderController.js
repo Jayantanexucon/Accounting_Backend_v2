@@ -24,10 +24,65 @@ import {
 } from "../repos/purchaseOrderRepo.js";
 import { getInvoicesByPORepo } from "../repos/invoiceRepo.js";
 import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
+import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
 
-const generatePONumber = async (companyId) => {
-  const timestamp = Date.now();
-  return `PO-${companyId.toString().slice(-4)}-${timestamp}`;
+/**
+ * Extract first 3-4 letters from vendor name
+ * @param {string} vendorName - Full vendor name
+ * @returns {string} - 3-4 letter code (uppercase)
+ */
+const extractClientCode = (vendorName = "") => {
+  const cleaned = String(vendorName || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  
+  // Return first 4 letters/numbers, or at least 3 if available
+  return cleaned.substring(0, 4) || "CLIE";
+};
+
+/**
+ * Generate unique PO number with format: PO-YYYYMMDD-CLIENT-XXXX
+ * @param {string} companyId - Company ID
+ * @param {string} vendorName - Vendor/Client name
+ * @param {Date} poDate - Purchase order date
+ * @returns {string} - Generated PO number
+ */
+const generatePONumber = async (companyId, vendorName = "", poDate = new Date()) => {
+  try {
+    // Format date as YYYYMMDD
+    const date = new Date(poDate);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const dateStr = `${year}${month}${day}`;
+    
+    // Extract client code (first 3-4 letters)
+    const clientCode = extractClientCode(vendorName);
+    
+    // Get count of POs for this company on this date to generate unique number
+    const PurchaseOrder = await getPurchaseOrderModel();
+    const startOfDay = new Date(year, date.getMonth(), date.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(year, date.getMonth(), date.getDate(), 23, 59, 59, 999);
+    
+    const countToday = await PurchaseOrder.countDocuments({
+      companyId: companyId,
+      poDate: {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      },
+    });
+    
+    // Sequential number: pad with zeros (e.g., 0001, 0002)
+    const sequenceNumber = String(countToday + 1).padStart(4, "0");
+    
+    return `PO-${dateStr}-${clientCode}-${sequenceNumber}`;
+  } catch (error) {
+    console.error("Error generating PO number:", error);
+    // Fallback to timestamp-based format
+    const timestamp = Date.now();
+    return `PO-${companyId.toString().slice(-4)}-${timestamp}`;
+  }
 };
 
 // Map the new paymentTerms value to the legacy billingModel field
@@ -160,7 +215,7 @@ export const createPurchaseOrder = async (req, res, next) => {
       }))
       : [];
 
-    const poNumber = await generatePONumber(companyId);
+    const poNumber = await generatePONumber(companyId, vendor?.name || "", poDate);
 
     const poData = {
       companyId,
@@ -304,7 +359,7 @@ export const updatePurchaseOrder = async (req, res, next) => {
     // Normalize milestones if present
     if (Array.isArray(updateData.milestones)) {
       updateData.milestones = updateData.milestones.map((m, index) => ({
-        ...m,
+        ...m, 
         milestoneNo: m.milestoneNo || index + 1,
         status: m.status || "pending",
       }));
