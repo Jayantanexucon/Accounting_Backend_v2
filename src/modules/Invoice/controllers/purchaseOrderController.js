@@ -99,39 +99,39 @@ export const createPurchaseOrder = async (req, res, next) => {
       getCompanyBasedGstSplit(company, vendor) || getGstSplit(vendor, deliverTo);
     const normalizedItems = Array.isArray(items)
       ? items.map((item) => {
-          const normalizedTax = normalizeLineItemTax(item, {
-            taxType: req.body.taxType,
-            taxLabel: req.body.taxLabel,
-            gstSplit,
-          });
-          const taxableValue = Number(item.taxableValue) || 0;
-          const totalAmountValue =
-            Number(item.totalAmount) ||
-            Number(item.total) ||
-            taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
-            0;
+        const normalizedTax = normalizeLineItemTax(item, {
+          taxType: req.body.taxType,
+          taxLabel: req.body.taxLabel,
+          gstSplit,
+        });
+        const taxableValue = Number(item.taxableValue) || 0;
+        const totalAmountValue =
+          Number(item.totalAmount) ||
+          Number(item.total) ||
+          taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
+          0;
 
-          totalTaxableValue += taxableValue;
-          totalAmount += totalAmountValue;
+        totalTaxableValue += taxableValue;
+        totalAmount += totalAmountValue;
 
-          return {
-            ...item,
-            hsnId: item.hsnId ? String(item.hsnId) : undefined,
-            hsnSac: item.hsnSac || "",
-            unit: item.unit || "each",
-            quantity: Number(item.quantity) || 0,
-            rate: Number(item.rate) || 0,
-            taxableValue,
-            totalAmount: totalAmountValue,
-            ...normalizedTax,
-            // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
-            taxRate: normalizedTax.taxRate,
-            taxAmount: normalizedTax.taxAmount,
-            gstRate: normalizedTax.gstRate,
-            gstAmount: normalizedTax.gstAmount,
-            combinedTaxRate: normalizedTax.combinedTaxRate,
-          };
-        })
+        return {
+          ...item,
+          hsnId: item.hsnId ? String(item.hsnId) : undefined,
+          hsnSac: item.hsnSac || "",
+          unit: item.unit || "each",
+          quantity: Number(item.quantity) || 0,
+          rate: Number(item.rate) || 0,
+          taxableValue,
+          totalAmount: totalAmountValue,
+          ...normalizedTax,
+          // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
+          taxRate: normalizedTax.taxRate,
+          taxAmount: normalizedTax.taxAmount,
+          gstRate: normalizedTax.gstRate,
+          gstAmount: normalizedTax.gstAmount,
+          combinedTaxRate: normalizedTax.combinedTaxRate,
+        };
+      })
       : [];
 
     const computedTaxMeta = buildTaxMeta({
@@ -310,22 +310,33 @@ export const updatePurchaseOrder = async (req, res, next) => {
       }));
     }
 
+    if (updateData.paymentTerms && updateData.paymentTerms !== oldPO.paymentTerms) {
+      if (updateData.paymentTerms !== "milestone") {
+        // Switching away from milestone → wipe milestones
+        updateData.milestones = [];
+      } else {
+        // Switching to milestone → wipe schedule-based fields
+        updateData.invoiceSchedule = null;
+        updateData.paymentSchedule = null;
+      }
+    }
+
     // Normalize hsnId to String on items and recalculate totals
     let totalTaxableValue = 0;
     let totalAmount = 0;
-    
+
     if (Array.isArray(updateData.items)) {
       const gstSplit =
         getCompanyBasedGstSplit(company, updateData.vendor || oldPO.vendor) ||
         getGstSplit(updateData.vendor || oldPO.vendor, updateData.deliverTo || oldPO.deliverTo);
-      
+
       updateData.items = updateData.items.map((item) => {
         const normalizedTax = normalizeLineItemTax(item, {
           taxType: updateData.taxType || oldPO.taxType,
           taxLabel: updateData.taxLabel || oldPO.taxLabel,
           gstSplit,
         });
-        
+
         const taxableValue = Number(item.taxableValue) || 0;
         const totalAmountValue =
           Number(item.totalAmount) ||
