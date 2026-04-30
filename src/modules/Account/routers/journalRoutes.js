@@ -11,52 +11,28 @@ import {
   approveJournal,
   rejectJournal,
   getPendingApprovals,
-  getJournalApprovalRequests,
-  requestJournalEditApproval,
-  requestJournalDeleteApproval,
-  updateJournalApprovalRequest,
 } from "../controllers/journalController.js";
 
 const router = express.Router();
 
 router.use(protect);
 
-router.post("/", accessControlMiddleware({ entityKey: "JOURNAL", action: "CREATE" }), createJournal);
+router.post("/", accessControlMiddleware({ entityKey: "Journal", action: "CREATE" }), createJournal);
 
-router.get("/", accessControlMiddleware({ entityKey: "JOURNAL", action: "VIEW" }), getAllJournals);
+router.get("/", getAllJournals);
 
-router.get("/stats/overview", accessControlMiddleware({ entityKey: "JOURNAL", action: "VIEW" }), getJournalStats);
+router.get("/stats/overview", getJournalStats);
 
-router.get("/pending/approvals", accessControlMiddleware({ entityKey: "JOURNAL", action: "VIEW" }), getPendingApprovals);
+router.get("/pending/approvals", getPendingApprovals);
 
-router.get("/approval-requests", accessControlMiddleware({ entityKey: "JOURNAL", action: "VIEW" }), getJournalApprovalRequests);
+router.get("/:id", getJournalById);
 
-router.put(
-  "/approval-requests/:requestId",
-  accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }),
-  updateJournalApprovalRequest
-);
+router.put("/:id", accessControlMiddleware({ entityKey: "Journal", action: "UPDATE" }), updateJournal);
 
-router.post(
-  "/:id/request-edit",
-  accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }),
-  requestJournalEditApproval
-);
+router.post("/:id/approve", accessControlMiddleware({ entityKey: "Journal", action: "APPROVE" }), approveJournal);
 
-router.post(
-  "/:id/request-delete",
-  accessControlMiddleware({ entityKey: "JOURNAL", action: "DELETE" }),
-  requestJournalDeleteApproval
-);
+router.post("/:id/reject", accessControlMiddleware({ entityKey: "Journal", action: "APPROVE" }), rejectJournal);
 
-router.get("/:id", accessControlMiddleware({ entityKey: "JOURNAL", action: "VIEW" }), getJournalById);
-
-router.put("/:id", accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }), updateJournal);
-
-router.post("/:id/approve", accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }), approveJournal);
-
-router.post("/:id/reject", accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }), rejectJournal);
-
-router.delete("/:id", accessControlMiddleware({ entityKey: "JOURNAL", action: "DELETE" }), deleteJournal);
+router.delete("/:id", accessControlMiddleware({ entityKey: "Journal", action: "DELETE" }), deleteJournal);
 
 export default router;

@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectAccountingDB } from "../../../config/db/accounting.db.js";
 
 const configSchema = new mongoose.Schema(
   {
@@ -11,7 +11,8 @@ const configSchema = new mongoose.Schema(
     value: mongoose.Schema.Types.Mixed,
     description: String,
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       indexed: true,
     },
     isActive: {
@@ -28,6 +29,6 @@ const configSchema = new mongoose.Schema(
 configSchema.index({ key: 1, companyId: 1 }, { unique: true, sparse: true });
 
 export const getConfigModel = async () => {
-  const db = getDatabase("accounting");
+  const db = await connectAccountingDB();
   return db.models.Config || db.model("Config", configSchema);
 };

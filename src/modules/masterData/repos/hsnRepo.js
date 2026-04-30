@@ -11,41 +11,37 @@ export const createHSNRepo = async (data) => {
   }
 };
 
-export const findHSNByIdRepo = async (id) => {
+export const findHSNByIdRepo = async (id, companyId) => {
   try {
     const HSN = await getHSNModel();
-    // Search all HSN codes (global master data) - no companyId filter
-    return await HSN.findOne({ _id: id });
+    return await HSN.findOne({ _id: id, companyId });
   } catch (error) {
     throw new AppError(error.message, 500, "findHSNByIdRepo");
   }
 };
 
-export const getAllHSNRepo = async () => {
+export const getAllHSNRepo = async (companyId) => {
   try {
     const HSN = await getHSNModel();
-    // Always return all HSN codes (global master data) - no companyId filter
-    return await HSN.find({}).sort({ createdAt: -1 });
+    return await HSN.find({ companyId }).sort({ createdAt: -1 });
   } catch (error) {
     throw new AppError(error.message, 500, "getAllHSNRepo");
   }
 };
 
-export const updateHSNRepo = async (id, data) => {
+export const updateHSNRepo = async (id, companyId, data) => {
   try {
     const HSN = await getHSNModel();
-    // HSN is treated as global master data, so update by HSN id only.
-    return await HSN.findOneAndUpdate({ _id: id }, data, { new: true, runValidators: true });
+    return await HSN.findOneAndUpdate({ _id: id, companyId }, data, { new: true, runValidators: true });
   } catch (error) {
     throw new AppError(error.message, 500, "updateHSNRepo");
   }
 };
 
-export const deleteHSNRepo = async (id) => {
+export const deleteHSNRepo = async (id, companyId) => {
   try {
     const HSN = await getHSNModel();
-    // HSN is treated as global master data, so delete by HSN id only.
-    return await HSN.findOneAndDelete({ _id: id });
+    return await HSN.findOneAndDelete({ _id: id, companyId });
   } catch (error) {
     throw new AppError(error.message, 500, "deleteHSNRepo");
   }

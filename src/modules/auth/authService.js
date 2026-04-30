@@ -1,5 +1,4 @@
 import jwt from "jsonwebtoken";
-import AppError from "../../utils/AppError.js";
 
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || "access-secret";
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "refresh-secret";
@@ -13,7 +12,7 @@ export const createAccessToken = (user) => {
       tokenVersion: user.tokenVersion,
     },
     JWT_ACCESS_SECRET,
-    { expiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN }
+    { expiresIn: "15m" }
   );
 };
 
@@ -24,7 +23,7 @@ export const createRefreshTokenString = (user) => {
       tokenVersion: user.tokenVersion,
     },
     JWT_REFRESH_SECRET,
-    { expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN }
+    { expiresIn: "7d" }
   );
 };
 
@@ -32,7 +31,7 @@ export const verifyAccessToken = (token) => {
   try {
     return jwt.verify(token, JWT_ACCESS_SECRET);
   } catch (error) {
-    throw new AppError("Invalid access token", 401, "verifyAccessToken");
+    throw new Error("Invalid access token");
   }
 };
 
@@ -40,7 +39,7 @@ export const verifyRefreshToken = (token) => {
   try {
     return jwt.verify(token, JWT_REFRESH_SECRET);
   } catch (error) {
-    throw new AppError("Invalid refresh token", 401, "verifyRefreshToken");
+    throw new Error("Invalid refresh token");
   }
 };
 

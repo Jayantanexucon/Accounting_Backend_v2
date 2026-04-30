@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectAccountingDB } from "../../../config/db/accounting.db.js";
 
 const accountTypeSchema = new mongoose.Schema(
   {
@@ -23,6 +23,6 @@ const accountTypeSchema = new mongoose.Schema(
 );
 
 export const getAccountTypeModel = async () => {
-  const db = getDatabase("accounting");
+  const db = await connectAccountingDB();
   return db.models.AccountType || db.model("AccountType", accountTypeSchema);
 };

@@ -1,4 +1,4 @@
-import { findUserByIdRepo, getAllUsersRepo, updateUserRepo, findUserRepo, createUserRepo } from "../repos/userRepo.js";
+import { findUserByIdRepo, getAllUsersRepo, updateUserRepo, findUserRepo } from "../repos/userRepo.js";
 import AppError from "../../../utils/AppError.js";
 import ApiResponse from "../../../utils/ApiResponse.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
@@ -170,17 +170,12 @@ export const updateUserPermissions = async (req, res, next) => {
 
     // Remove ALL existing permissions for this company
     user.permissions = user.permissions.filter(
-      (perm) => perm.company?.toString() !== companyId && perm.companyId?.toString() !== companyId
+      (perm) => perm.companyId?.toString() !== companyId
     );
 
-    // Add new permissions if array is not empty - normalize the structure
+    // Add new permissions if array is not empty
     if (permissions.length > 0) {
-      const normalizedPermissions = permissions.map((perm) => ({
-        entity: perm.entity || perm.entityId,
-        actions: perm.actions || [],
-        company: perm.company || companyId,
-      }));
-      user.permissions.push(...normalizedPermissions);
+      user.permissions.push(...permissions);
     }
 
     await user.save();
@@ -232,12 +227,8 @@ export const getAllCompaniesForUser = async (req, res, next) => {
       );
     }
 
-    // Get company IDs from user permissions (handle both 'company' and 'companyId' for backward compatibility)
     const allowedCompanyIds = new Set(
-      user?.permissions?.map((p) => {
-        const compId = p.company?.toString() || p.companyId?.toString();
-        return compId;
-      })
+      user?.permissions?.map((p) => p.companyId?.toString() || p.companyId)
     );
 
     const companies = allCompanies.filter((company) =>
@@ -380,9 +371,9 @@ export const getCompanyForUserById = async (req, res, next) => {
 
     const hasAccess = user.permissions?.some((perm) => {
       const permCompanyId =
-        typeof perm.company === "object"
-          ? perm.company?._id?.toString()
-          : perm.company?.toString();
+        typeof perm.companyId === "object"
+          ? perm.companyId?._id?.toString()
+          : perm.companyId?.toString();
 
       return permCompanyId === companyId?.toString();
     });

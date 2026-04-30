@@ -2,9 +2,13 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import passport from "passport";
-import { initializeDatabaseConnections, getConnectedModules } from "./config/databases.js";
+import { connectUserDB } from "./config/db/user.db.js";
+import { connectInvoiceDB } from "./config/db/invoice.db.js";
+import { connectCompanyDB } from "./config/db/company.db.js";
+import { connectAccountingDB } from "./config/db/accounting.db.js";
+import { connectAuditDB } from "./config/db/audit.db.js";
+import { connectMasterDB } from "./config/db/master.db.js";
 import errorHandler from "./utils/errorHandler.js";
-import { initializeEntities } from "./utils/initializeEntities.js";
 
 // Routes
 import authRoutes from "./modules/auth/routes.js";
@@ -13,80 +17,53 @@ import companyRoutes from "./modules/company/routers/routes.js";
 import masterDataRoutes from "./modules/masterData/routers/masterDataRoutes.js";
 import accountingRoutes from "./modules/Account/routers/accountingAggregator.js";
 import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
-import invoiceAccountingRoutes from "./modules/Invoice/routers/invoiceAccountingRoutes.js";
-import auditRoutes from "./modules/audit/routes.js";
 import systemRoutes from "./routes/systemRoutes.js";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const app = express();
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// 🔧 Dynamic CORS Configuration for Development & Production
-const allowedOrigins = [
-  // Development
-  "http://localhost:5173",
-  "http://localhost:3000",
-  // Production - from environment variable
-  process.env.CLIENT_URL,
-  // Additional allowed origins from environment
-  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : []),
-].filter(Boolean); // Remove null/undefined values
-
-console.log("🔐 CORS Allowed Origins:", allowedOrigins.join(", "));
-
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // Allow requests without origin (like mobile apps or curl requests)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`⚠️  CORS blocked request from origin: ${origin}`);
-        console.log(`   Allowed origins: ${allowedOrigins.join(", ")}`);
-        callback(new Error("CORS: Origin not allowed"));
-      }
-    },
-    credentials: true, // ✅ Allow credentials (cookies, Authorization headers)
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-    maxAge: 86400, // 24 hours
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    credentials: true,
   })
 );
-
 app.use(cookieParser());
 app.use(passport.initialize());
 
 // Initialize all database connections
 export const initializeDatabases = async () => {
   try {
-    // ✅ Validate AVAILABLE_MODULES before initializing
-    const modulesEnv = process.env.AVAILABLE_MODULES;
-    if (!modulesEnv) {
-      throw new Error("❌ AVAILABLE_MODULES is not defined in environment variables!");
+    // Parse available modules from environment variable
+    const availableModules = (process.env.AVAILABLE_MODULE || "")
+      .split(",")
+      .map((m) => m.trim().toLowerCase())
+      .filter((m) => m.length > 0);
+
+    console.log(`📦 Initializing modules: ${availableModules.length > 0 ? availableModules.join(", ") : "core only"}`);
+
+    // Always connect core databases
+    await connectUserDB();
+    await connectCompanyDB();
+    await connectAuditDB();
+    await connectMasterDB();
+
+    // Conditionally connect module-specific databases
+    if (availableModules.includes("invoice")) {
+      await connectInvoiceDB();
+    } else {
+      console.log("⏭️  Invoice module disabled - skipping invoice_db connection");
     }
 
-    // ✅ Validate JSON format
-    try {
-      JSON.parse(modulesEnv);
-    } catch (parseError) {
-      throw new Error(`❌ Invalid JSON in AVAILABLE_MODULES: ${parseError.message}\nValue: ${modulesEnv}`);
+    if (availableModules.includes("accounting")) {
+      await connectAccountingDB();
+    } else {
+      console.log("⏭️  Accounting module disabled - skipping accounting_db connection");
     }
 
-    // Initialize all databases from AVAILABLE_MODULES
-    await initializeDatabaseConnections();
-
-    // Initialize default entities after all databases are connected
-    await initializeEntities();
+    console.log("✅ All available databases connected successfully");
   } catch (error) {
     console.error("❌ Database connection failed:", error);
     process.exit(1);
@@ -106,52 +83,32 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
-app.use("/api/audit-logs", auditRoutes);
 
-/**
- * Register module-specific routes based on connected databases
- * This is called AFTER databases are initialized
- */
-export const registerModuleRoutes = () => {
-  try {
-    // ✅ Now this is safe - databases are already initialized when this is called
-    const connectedModules = getConnectedModules();
-    console.log('====================================');
-    console.log('Connected Modules:', connectedModules);
-    console.log('====================================');
+// Conditionally register module-specific routes
+const availableModules = (process.env.AVAILABLE_MODULE || "")
+  .split(",")
+  .map((m) => m.trim().toLowerCase())
+  .filter((m) => m.length > 0);
 
-    if (connectedModules.includes("accounting")) {
-      console.log("✅ Accounting module routes registered at /api/accounting");
-      app.use("/api/accounting", accountingRoutes);
-    }
+if (availableModules.includes("accounting")) {
+  app.use("/api/accounting", accountingRoutes);
+  console.log("✅ Accounting module routes registered at /api/accounting");
+}
 
-    if (connectedModules.includes("invoice")) {
-      console.log("✅ Invoice module routes registered at /api/invoice");
-      app.use("/api/invoices", invoiceRoutes);
-      console.log("✅ Invoice accounting routes registered at /api/invoice-accounting");
-      app.use("/api/invoice-accounting", invoiceAccountingRoutes);
-    }
-  } catch (error) {
-    console.error("⚠️  Failed to register module routes:", error.message);
-  }
-};
+if (availableModules.includes("invoice")) {
+  app.use("/api/invoice", invoiceRoutes);
+  console.log("✅ Invoice module routes registered at /api/invoice");
+}
 
-/**
- * Register error handlers (must be called AFTER all routes are registered)
- * This is called in server.js after registerModuleRoutes()
- */
-export const registerErrorHandlers = () => {
-  // 404 Handler - catches routes that don't exist
-  app.use((req, res) => {
-    res.status(404).json({
-      success: false,
-      message: "Route not found",
-    });
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
   });
+});
 
-  // Error Handler (must be last)
-  app.use(errorHandler);
-};
+// Error Handler (must be last)
+app.use(errorHandler);
 
 export default app;
- 

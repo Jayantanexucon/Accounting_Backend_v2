@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectAuditDB } from "../../../config/db/audit.db.js";
 
 const auditLogSchema = new mongoose.Schema({
   // Company & Scope
@@ -94,6 +94,6 @@ auditLogSchema.index({ performedBy: 1, timestamp: -1 });
 auditLogSchema.index({ timestamp: -1 });
 
 export const getAuditLogModel = async () => {
-  const db = getDatabase("audit");
+  const db = await connectAuditDB();
   return db.models.AuditLog || db.model("AuditLog", auditLogSchema);
 };

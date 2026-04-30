@@ -1,46 +1,11 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
-
-const addressSchema = new mongoose.Schema(
-  {
-    type: {
-      type: String,
-      enum: ["DEFAULT", "SHIP_TO", "BILL_TO", "BRANCH", "OTHER"],
-      default: "DEFAULT",
-    },
-    label: { type: String, trim: true, default: "" },
-    line1: { type: String, trim: true, default: "" },
-    line2: { type: String, trim: true, default: "" },
-    city: { type: String, trim: true, default: "" },
-    state: { type: String, trim: true, default: "" },
-    country: { type: String, trim: true, default: "" },
-    pinCode: { type: String, trim: true, default: "" },
-    stateCode: { type: String, trim: true, default: "" },
-    gstStateCode: { type: String, trim: true, default: "" },
-    taxType: { type: String, trim: true, default: "" },
-    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
-    countryId: { type: mongoose.Schema.Types.ObjectId, ref: "Country", default: null },
-    stateId: { type: mongoose.Schema.Types.ObjectId, ref: "State", default: null },
-    isDefault: { type: Boolean, default: false },
-    isShipTo: { type: Boolean, default: false },
-  },
-  { _id: true }
-);
-
-const taxDetailSchema = new mongoose.Schema(
-  {
-    taxType: { type: String, trim: true, default: "" },
-    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
-    label: { type: String, trim: true, default: "" },
-  },
-  { _id: false }
-);
+import { connectMasterDB } from "../../../config/db/master.db.js";
 
 const VendorSchema = new mongoose.Schema(
   {
     companyId: {
-      type: String,
-      // ref: "Company",
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: true,
       index: true,
     },
@@ -58,11 +23,6 @@ const VendorSchema = new mongoose.Schema(
     contactPerson: {
       type: String,
       trim: true,
-    },
-    website: {
-      type: String,
-      trim: true,
-      default: "",
     },
     registeredAddress: {
       type: String,
@@ -102,76 +62,10 @@ const VendorSchema = new mongoose.Schema(
     gstin: {
       type: String,
       trim: true,
-      default: "",
     },
     pan: {
       type: String,
       trim: true,
-      default: "",
-    },
-    vatNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    einNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    ssnNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    companyNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    nationalIdNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    taxIdentifierType: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    taxIdentificationNumber: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-    taxDetails: {
-      type: [taxDetailSchema],
-      default: [],
-    },
-    addresses: {
-      type: [addressSchema],
-      default: [],
-    },
-    defaultAddress: {
-      type: addressSchema,
-      default: () => ({}),
-    },
-    additionalAddresses: {
-      type: [addressSchema],
-      default: [],
-    },
-    billingAddress: {
-      type: addressSchema,
-      default: () => ({}),
-    },
-    shippingAddress: {
-      type: addressSchema,
-      default: () => ({}),
-    },
-    gstType: {
-      type: String,
-      trim: true,
-      default: "",
     },
     serviceType: {
       type: String,
@@ -186,39 +80,9 @@ const VendorSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    currency: {
-      type: String,
-      trim: true,
-      default: "INR",
-    },
-    currencySymbol: {
-      type: String,
-      trim: true,
-      default: "₹",
-    },
-    currencyName: {
-      type: String,
-      trim: true,
-      default: "Indian Rupee",
-    },
     creditLimit: {
       type: Number,
       default: 0,
-    },
-    tdsApplicable: {
-      type: Boolean,
-      default: false,
-    },
-    tdsRate: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 100,
-    },
-    tdsSection: {
-      type: String,
-      trim: true,
-      default: "",
     },
     bankName: {
       type: String,
@@ -264,11 +128,6 @@ const VendorSchema = new mongoose.Schema(
       enum: ["Pending", "Approved", "Rejected", "Completed"],
       default: "Pending",
     },
-    remarks: {
-      type: String,
-      trim: true,
-      default: "",
-    },
     isActive: {
       type: Boolean,
       default: true,
@@ -286,6 +145,6 @@ const VendorSchema = new mongoose.Schema(
 );
 
 export const getVendorModel = async () => {
-  const db = getDatabase("master");
+  const db = await connectMasterDB();
   return db.models.Vendor || db.model("Vendor", VendorSchema);
 };

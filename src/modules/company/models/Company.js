@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectCompanyDB } from "../../../config/db/company.db.js";
 
 const addressSchema = new Schema(
   {
@@ -116,6 +116,6 @@ const companySchema = new Schema(
 );
 
 export const getCompanyModel = async () => {
-  const db = getDatabase("company");
+  const db = await connectCompanyDB();
   return db.models.Company || db.model("Company", companySchema);
 };

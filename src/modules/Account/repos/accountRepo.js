@@ -1,6 +1,5 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
-import { getGroupModel } from "../models/Group.js";
 
 export const createAccountRepo = async (accountData) => {
   try {
@@ -32,7 +31,6 @@ export const createAccountRepo = async (accountData) => {
 
 export const getAccountByIdRepo = async (id) => {
   try {
-    await getGroupModel();
     const Account = await getAccountModel();
     const account = await Account.findById(id).populate("groupId").lean();
     return account;
@@ -43,7 +41,6 @@ export const getAccountByIdRepo = async (id) => {
 
 export const getAccountsRepo = async (filter = {}) => {
   try {
-    await getGroupModel();
     const Account = await getAccountModel();
     const accounts = await Account.find(filter).populate("groupId").sort({ code: 1 }).lean();
     return accounts;
@@ -54,7 +51,6 @@ export const getAccountsRepo = async (filter = {}) => {
 
 export const updateAccountRepo = async (id, updateData) => {
   try {
-    await getGroupModel();
     const Account = await getAccountModel();
     const account = await Account.findByIdAndUpdate(id, updateData, {
       new: true,

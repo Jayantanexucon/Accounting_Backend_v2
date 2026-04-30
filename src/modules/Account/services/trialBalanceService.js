@@ -1,6 +1,5 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
-import { getGroupModel } from "../models/Group.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
 import {
   aggregateAccountBalances,
@@ -8,7 +7,6 @@ import {
   isTrialBalanced,
   sumJournalLineAmounts,
 } from "../utils/balanceComputation.util.js";
-import { enforceScheduleMappingForNature } from "../utils/scheduleIIIConfig.js";
 
 /**
  * Trial Balance Report Service
@@ -55,55 +53,11 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
     throw new AppError("No accounts found for this company", 404, "getTrialBalance");
   }
 
-  const Group = await getGroupModel();
-  const groupIds = [
-    ...new Set(accounts.map((account) => account.groupId?.toString()).filter(Boolean)),
-  ];
-  const groups = await Group.find({ _id: { $in: groupIds }, companyId }).lean();
-  const groupsById = new Map(groups.map((group) => [group._id.toString(), group]));
-  const accountsWithGroupClassification = accounts.map((account) => {
-    const group = groupsById.get(account.groupId?.toString());
-    if (!group) return account;
-    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
-      ...(account.scheduleMapping || {}),
-      noteNo: account.scheduleMapping?.noteNo || group.noteNo || null,
-    });
-
-    return {
-      ...account,
-      groupId: group,
-      groupName: group.name || account.groupName,
-      groupNature: group.nature,
-      groupBalanceType: group.balanceType,
-      scheduleMapping: enforcedScheduleMapping,
-    };
-  });
-
-  // Get all journals up to the as-of date
-  const Journal = await (await import("../models/Journal.js")).getJournalModel();
-  const validJournals = await Journal.find({
-    date: { $lte: dateAsOf },
-    companyId,
-    status: { $in: ["Posted", "Approved"] } // optionally restrict to posted
-  })
-    .select("_id date number voucherType sourceType referenceNumber partyName externalDocNo createdAt")
-    .lean();
-
-  const journalIds = validJournals.map(j => j._id);
-  const journalsMap = new Map(validJournals.map(j => [j._id.toString(), j]));
-
   // Get all journal lines up to the as-of date
   const JournalLine = await getJournalLineModel();
-  const rawJournalLines = await JournalLine.find({
-    journalId: { $in: journalIds },
-    companyId
+  const journalLines = await JournalLine.find({
+    journalDate: { $lte: dateAsOf },
   }).lean();
-
-  // Attach journal reference to lines for uniform handling if needed
-  const journalLines = rawJournalLines.map(line => ({
-    ...line,
-    journalId: journalsMap.get(line.journalId?.toString())
-  }));
 
   // Group journal lines by account
   const linesByAccount = new Map();
@@ -118,7 +72,7 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
   // Build balance record for each account
   const accountBalances = [];
 
-  for (const account of accountsWithGroupClassification) {
+  for (const account of accounts) {
     const accountId = account._id.toString();
     const lines = linesByAccount.get(accountId) || [];
 
@@ -134,16 +88,15 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
 
     // Include opening balance in computation
     balanceRecord.openingBalance = account.openingBalance || 0;
-    const normalBalance = `${balanceRecord.normalBalance || "Debit"}`.toLowerCase();
-    balanceRecord.closingBalance = (account.openingBalance || 0) + (totalDebit - totalCredit);
+    balanceRecord.closingBalance = account.openingBalance + (totalDebit - totalCredit);
 
-    if (normalBalance === "credit") {
-      balanceRecord.closingBalance = (account.openingBalance || 0) + (totalCredit - totalDebit);
+    if (account.openingType === "Credit") {
+      balanceRecord.closingBalance = account.openingBalance + (totalCredit - totalDebit);
     }
 
     // Re-split with updated closing balance
     if (balanceRecord.closingBalance > 0) {
-      if (normalBalance === "debit") {
+      if (account.openingType === "Debit") {
         balanceRecord.closingDebit = balanceRecord.closingBalance;
         balanceRecord.closingCredit = 0;
       } else {
@@ -151,7 +104,7 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
         balanceRecord.closingCredit = balanceRecord.closingBalance;
       }
     } else if (balanceRecord.closingBalance < 0) {
-      if (normalBalance === "debit") {
+      if (account.openingType === "Debit") {
         balanceRecord.closingDebit = 0;
         balanceRecord.closingCredit = Math.abs(balanceRecord.closingBalance);
       } else {

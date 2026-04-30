@@ -1,11 +1,11 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectMasterDB } from "../../../config/db/master.db.js";
 
 const HSNSchema = new mongoose.Schema(
   {
     companyId: {
-      type: String,
-      // ref: "Company",
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: true,
       index: true,
     },
@@ -68,6 +68,6 @@ const HSNSchema = new mongoose.Schema(
 HSNSchema.index({ companyId: 1, hsnCode: 1, serviceType: 1 }, { unique: true });
 
 export const getHSNModel = async () => {
-  const db = getDatabase("master");
+  const db = await connectMasterDB();
   return db.models.HSN || db.model("HSN", HSNSchema);
 };

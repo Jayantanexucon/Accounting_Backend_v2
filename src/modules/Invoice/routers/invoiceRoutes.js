@@ -1,6 +1,6 @@
 import express from "express";
 import { protect } from "../../../middlewares/authMiddleware.js";
-import { checkPermission } from "../../../middlewares/accessBasedMiddleware.js";
+import { accessControlMiddleware } from "../../../middlewares/accessBasedMiddleware.js";
 import {
   createInvoice,
   createInvoiceWithJournal,
@@ -15,17 +15,9 @@ import {
   approveInvoice,
   rejectInvoice,
   recordPayment,
-  postSalesJournal,
   exportInvoiceById,
   exportInvoiceListEndpoint,
-  downloadWordInvoice,
-  downloadPdfInvoice,
 } from "../controllers/invoiceController.js";
-import {
-  getPOTaxReport,
-  getClientTaxReport,
-  getTaxSummary,
-} from "../controllers/taxReportController.js";
 
 const router = express.Router();
 
@@ -33,60 +25,48 @@ const router = express.Router();
 router.use(protect);
 
 // Create invoice
-router.post("/", checkPermission("INVOICE", "CREATE"), createInvoice);
+router.post("/", accessControlMiddleware({ entityKey: "Invoice", action: "CREATE" }), createInvoice);
 
 // Create invoice with automatic journal entry (transactional)
-router.post("/with-journal", checkPermission("INVOICE", "CREATE"), createInvoiceWithJournal);
+router.post("/with-journal", accessControlMiddleware({ entityKey: "Invoice", action: "CREATE" }), createInvoiceWithJournal);
 
 // Get all invoices (with optional filtering by status, date range)
-router.get("/", checkPermission("INVOICE", "VIEW"), getAllInvoices);
+router.get("/", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getAllInvoices);
 
 // Get invoice statistics
-router.get("/stats/overview", checkPermission("INVOICE", "VIEW"), getInvoiceStats);
-
-// Tax flow reports
-router.get("/reports/po-tax", checkPermission("INVOICE", "VIEW"), getPOTaxReport);
-router.get("/reports/client-tax", checkPermission("INVOICE", "VIEW"), getClientTaxReport);
-router.get("/reports/tax-summary", checkPermission("INVOICE", "VIEW"), getTaxSummary);
+router.get("/stats/overview", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceStats);
 
 // Get pending approvals
-router.get("/approvals/pending", checkPermission("INVOICE", "VIEW"), getPendingApprovals);
+router.get("/approvals/pending", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getPendingApprovals);
 
 // Search by invoice number
-router.get("/search/number", checkPermission("INVOICE", "VIEW"), getInvoiceByNumber);
+router.get("/search/number", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceByNumber);
 
 // Get invoices for a specific PO
-router.get("/po/:poId", checkPermission("INVOICE", "VIEW"), getInvoicesByPO);
+router.get("/po/:poId", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoicesByPO);
 
 // Get single invoice by ID
-router.get("/:id", checkPermission("INVOICE", "VIEW"), getInvoiceById);
+router.get("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), getInvoiceById);
 
 // Update invoice
-router.put("/:id", checkPermission("INVOICE", "EDIT"), updateInvoice);
+router.put("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), updateInvoice);
 
 // Delete invoice
-router.delete("/:id", checkPermission("INVOICE", "DELETE"), deleteInvoice);
+router.delete("/:id", accessControlMiddleware({ entityKey: "Invoice", action: "DELETE" }), deleteInvoice);
 
 // Approve invoice
-router.post("/:id/approve", checkPermission("INVOICE", "EDIT"), approveInvoice);
+router.post("/:id/approve", accessControlMiddleware({ entityKey: "Invoice", action: "APPROVE" }), approveInvoice);
 
 // Reject invoice
-router.post("/:id/reject", checkPermission("INVOICE", "EDIT"), rejectInvoice);
+router.post("/:id/reject", accessControlMiddleware({ entityKey: "Invoice", action: "APPROVE" }), rejectInvoice);
 
 // Record payment
-router.post("/:id/payment", checkPermission("INVOICE", "EDIT"), recordPayment);
+router.post("/:id/payment", accessControlMiddleware({ entityKey: "Invoice", action: "UPDATE" }), recordPayment);
 
-// Post sales journal
-router.post("/:id/post-sales-journal", checkPermission("INVOICE", "EDIT"), postSalesJournal);
-
-// Export single invoice (legacy, kept for fallback if needed)
-router.get("/:id/export", checkPermission("INVOICE", "VIEW"), exportInvoiceById);
-
-// Download routes
-router.get("/:id/download/word", checkPermission("INVOICE", "VIEW"), downloadWordInvoice);
-router.get("/:id/download/pdf", checkPermission("INVOICE", "VIEW"), downloadPdfInvoice);
+// Export single invoice
+router.get("/:id/export", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), exportInvoiceById);
 
 // Export invoice list
-router.get("/export/list/all", checkPermission("INVOICE", "VIEW"), exportInvoiceListEndpoint);
+router.get("/export/list/all", accessControlMiddleware({ entityKey: "Invoice", action: "READ" }), exportInvoiceListEndpoint);
 
 export default router;

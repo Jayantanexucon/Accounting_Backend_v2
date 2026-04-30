@@ -2,12 +2,10 @@ import { createStateRepo, findStateByIdRepo, getStatesByCountryRepo, getAllState
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
-import { normalizeStatePayload } from "../utils/entityMasterData.js";
 
 export const createStateController = async (req, res, next) => {
   try {
-    const normalizedPayload = normalizeStatePayload(req.body);
-    const { stateName, stateCode, country } = normalizedPayload;
+    const { stateName, stateCode, country } = req.body;
     const userId = req.user?._id;
 
     if (!stateName || !stateCode || !country) {
@@ -15,7 +13,9 @@ export const createStateController = async (req, res, next) => {
     }
 
     const state = await createStateRepo({
-      ...normalizedPayload,
+      stateName,
+      stateCode,
+      country,
       createdBy: userId,
       updatedBy: userId,
     });
@@ -104,7 +104,7 @@ export const getStateByIdController = async (req, res, next) => {
 export const updateStateController = async (req, res, next) => {
   try {
     const { stateId } = req.params;
-    const updateData = normalizeStatePayload(req.body);
+    const updateData = req.body;
     const userId = req.user?._id;
 
     const oldState = await findStateByIdRepo(stateId);

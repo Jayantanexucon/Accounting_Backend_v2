@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectAccountingDB } from "../../../config/db/accounting.db.js";
 
 const journalLineSchema = new mongoose.Schema(
   {
@@ -18,7 +18,8 @@ const journalLineSchema = new mongoose.Schema(
     accountCode: String,
     accountName: String,
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -32,16 +33,14 @@ const journalLineSchema = new mongoose.Schema(
     },
     description: String,
     linkedToClientId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Client",
     },
     linkedToVendorId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vendor",
     },
     lineNumber: Number,
-    isReconciled: {
-      type: Boolean,
-      default: false,
-    },
   },
   {
     timestamps: true,
@@ -52,6 +51,6 @@ journalLineSchema.index({ journalId: 1, accountId: 1 });
 journalLineSchema.index({ companyId: 1, accountId: 1 });
 
 export const getJournalLineModel = async () => {
-  const db = getDatabase("accounting");
+  const db = await connectAccountingDB();
   return db.models.JournalLine || db.model("JournalLine", journalLineSchema);
 };

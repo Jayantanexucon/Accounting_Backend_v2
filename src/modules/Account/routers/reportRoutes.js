@@ -1,6 +1,6 @@
 import express from "express";
 import { protect } from "../../../middlewares/authMiddleware.js";
-import { checkPermission } from "../../../middlewares/accessBasedMiddleware.js";
+import { accessControlMiddleware } from "../../../middlewares/accessBasedMiddleware.js";
 import {
   getLedgerReportHandler,
   getGeneralLedgerHandler,
@@ -11,7 +11,6 @@ import {
   getProfitAndLossHandler,
   getFinancialStatementsHandler,
 } from "../controllers/reportController.js";
-import { getBusinessInsightsHandler } from "../controllers/businessInsightsController.js";
 
 const router = express.Router({ mergeParams: true });
 
@@ -26,7 +25,7 @@ router.use(protect);
 // GET /api/accounting/report/:companyId/ledger?accountId=xxx&startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/ledger",
-  checkPermission("CHART OF ACCOUNTS", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getLedgerReportHandler
 );
 
@@ -34,7 +33,7 @@ router.get(
 // GET /api/accounting/report/:companyId/general-ledger?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/general-ledger",
-  checkPermission("CHART OF ACCOUNTS", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getGeneralLedgerHandler
 );
 
@@ -46,7 +45,7 @@ router.get(
 // GET /api/accounting/report/:companyId/trial-balance?asOfDate=xxx
 router.get(
   "/:companyId/trial-balance",
-  checkPermission("TRIAL BALANCE", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getTrialBalanceHandler
 );
 
@@ -54,7 +53,7 @@ router.get(
 // GET /api/accounting/report/:companyId/trial-balance-period?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/trial-balance-period",
-  checkPermission("TRIAL BALANCE", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getTrialBalancePeriodHandler
 );
 
@@ -62,7 +61,7 @@ router.get(
 // GET /api/accounting/report/:companyId/validate-trial-balance?asOfDate=xxx
 router.get(
   "/:companyId/validate-trial-balance",
-  checkPermission("TRIAL BALANCE", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   validateTrialBalanceHandler
 );
 
@@ -74,7 +73,7 @@ router.get(
 // GET /api/accounting/report/:companyId/balance-sheet?asOfDate=xxx
 router.get(
   "/:companyId/balance-sheet",
-  checkPermission("BALANCE SHEET", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getBalanceSheetHandler
 );
 
@@ -82,7 +81,7 @@ router.get(
 // GET /api/accounting/report/:companyId/profit-loss?startDate=xxx&endDate=xxx
 router.get(
   "/:companyId/profit-loss",
-  checkPermission("PROFIT AND LOSS", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getProfitAndLossHandler
 );
 
@@ -90,15 +89,8 @@ router.get(
 // GET /api/accounting/report/:companyId/financial-statements?statementDate=xxx
 router.get(
   "/:companyId/financial-statements",
-  checkPermission("CHART OF ACCOUNTS", "VIEW"),
+  accessControlMiddleware({ entityKey: "Report", action: "READ" }),
   getFinancialStatementsHandler
-);
-
-// Business insights / management summary
-router.get(
-  "/:companyId/business-insights",
-  checkPermission("CHART OF ACCOUNTS", "VIEW"),
-  getBusinessInsightsHandler
 );
 
 export default router;

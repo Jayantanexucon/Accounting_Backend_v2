@@ -189,24 +189,6 @@ export const accessTokenController = async (req, res, next) => {
 
 export const fetchMe = async (req, res, next) => {
   try {
-    // 🔍 PRODUCTION DEBUG: Log incoming request details
-    const requestDebugInfo = {
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV,
-      origin: req.headers.origin,
-      referer: req.headers.referer,
-      hasAuthHeader: !!req.headers.authorization,
-      cookiesReceived: Object.keys(req.cookies || {}),
-      ac_cmp_value: req.cookies?.AC_CMP || null,
-      allCookies: req.cookies,
-    };
-
-    if (req.cookies?.AC_CMP) {
-      console.log(`✅ [fetchMe] Cookie AC_CMP received:`, requestDebugInfo);
-    } else {
-      console.warn(`⚠️  [fetchMe] NO AC_CMP Cookie found!`, requestDebugInfo);
-    }
-
     const azureEmail = (
       req.user?.preferred_username ||
       req.user?.email ||
@@ -229,10 +211,6 @@ export const fetchMe = async (req, res, next) => {
       throw new AppError("User not found", 404);
     }
 
-    if (user.isBlocked) {
-      throw new AppError("Your account has been blocked", 403);
-    }
-
     if (azureObjectId && !user.azureObjectId) {
       user = await updateUserRepo(user._id, { azureObjectId });
     }
@@ -240,76 +218,31 @@ export const fetchMe = async (req, res, next) => {
     const selectedCompanyId = req.cookies?.AC_CMP;
     const allCompanies = await findCompaniesRepo({});
 
-    const resolveSelectedCompany = (companies, fallbackAllCompanies = []) => {
-      if (!Array.isArray(companies)) companies = [];
+    const resolveSelectedCompany = (companies) => {
+      if (!Array.isArray(companies) || companies.length === 0) return null;
 
-      const debugInfo = {
-        cookieValue: selectedCompanyId,
-        companiesAvailable: companies.length,
-        fallbackCompanies: fallbackAllCompanies.length,
-        userIsAdmin: user.role === "superAdmin",
-      };
-
-      console.log(`[resolveSelectedCompany]`, debugInfo);
-
-      // Priority 1: Use cookie-based selection if available
       if (selectedCompanyId) {
-        // First, try to find in filtered companies (user has explicit permission)
         const matchedCompany = companies.find(
           (company) => company?._id?.toString() === selectedCompanyId
         );
-        if (matchedCompany) {
-          console.log(`✅ [resolveSelectedCompany] Resolved company from cookie (in permitted list): ${matchedCompany.name}`);
-          return matchedCompany;
-        }
-
-        // If not in filtered list, check if user owns or is employee of that company
-        const ownershipMatch = fallbackAllCompanies.find(
-          (company) => company?._id?.toString() === selectedCompanyId
-        );
-        if (ownershipMatch) {
-          const isOwner = ownershipMatch.owner?.toString() === user._id.toString();
-          const isEmployee = ownershipMatch.employees?.some(
-            (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
-          );
-          if (isOwner || isEmployee) {
-            console.log(`✅ [resolveSelectedCompany] Resolved company from cookie (owner/employee check passed): ${ownershipMatch.name}`);
-            return ownershipMatch;
-          }
-        }
-
-        console.warn(`⚠️  [resolveSelectedCompany] Cookie company ${selectedCompanyId} not found or access denied`);
+        if (matchedCompany) return matchedCompany;
       }
 
-      // Priority 2: No companies found
-      if (companies.length === 0) {
-        console.warn(`⚠️  [resolveSelectedCompany] No companies available for user`);
-        return null;
-      }
-
-      // Priority 3: If single company, return it
       if (companies.length === 1) {
-        console.log(`✅ [resolveSelectedCompany] Resolved company (single available): ${companies[0].name}`);
         return companies[0];
       }
 
-      // Priority 4: Multiple companies, no valid cookie - return first company as default
-      console.log(`⚠️  [resolveSelectedCompany] Multiple companies found, no valid selection. Defaulting to first: ${companies[0].name}`);
-      return companies[0];
+      return null;
     };
-
-    const accessToken = createAccessToken(user);
 
     if (user.role === "superAdmin") {
       return res.json({
         user,
-        accessToken,
         companies: allCompanies,
-        selectedCompany: resolveSelectedCompany(allCompanies, allCompanies),
+        selectedCompany: resolveSelectedCompany(allCompanies),
       });
     }
 
-    // Primary: Filter by permissions
     const allowedCompanyIds = new Set(
       user?.permissions
         ?.map((p) => p.company?._id || p.companyId || p.company)
@@ -317,48 +250,14 @@ export const fetchMe = async (req, res, next) => {
         .map((companyId) => companyId.toString())
     );
 
-    let companies = allCompanies.filter((company) =>
+    const companies = allCompanies.filter((company) =>
       allowedCompanyIds.has(company?._id?.toString())
     );
 
-    // Fallback: If no companies from permissions, use direct ownership/employee status
-    if (companies.length === 0) {
-      companies = allCompanies.filter((company) => {
-        const isOwner = company?.owner?.toString() === user._id.toString();
-        const isEmployee = company?.employees?.some(
-          (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
-        );
-        return isOwner || isEmployee;
-      });
-
-      // Log the fallback for debugging
-      console.log(`⚠️  User ${user._id} has no permission-based companies. Using ownership/employee fallback:`, companies.length);
-    }
-
-    // 🔧 FIX: Ensure cookie-selected company is in the list if user has access
-    if (selectedCompanyId) {
-      const cookieCompany = allCompanies.find(
-        (company) => company?._id?.toString() === selectedCompanyId
-      );
-      
-      if (cookieCompany) {
-        const isOwner = cookieCompany.owner?.toString() === user._id.toString();
-        const isEmployee = cookieCompany.employees?.some(
-          (emp) => emp?.user?.toString() === user._id.toString() || emp?.userId?.toString() === user._id.toString()
-        );
-        
-        if ((isOwner || isEmployee) && !companies.find(c => c._id.toString() === selectedCompanyId)) {
-          console.log(`✅ Adding cookie-selected company to list: ${cookieCompany.name}`);
-          companies.push(cookieCompany);
-        }
-      }
-    }
-
     return res.json({
       user,
-      accessToken,
       companies,
-      selectedCompany: resolveSelectedCompany(companies, allCompanies),
+      selectedCompany: resolveSelectedCompany(companies),
     });
   } catch (error) {
     next(error);

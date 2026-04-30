@@ -1,8 +1,5 @@
 import AppError from "../../../utils/AppError.js";
 
-const normalizeBalanceType = (value = "Debit") =>
-  `${value}`.toLowerCase() === "credit" ? "Credit" : "Debit";
-
 /**
  * Balance Computation Utility
  * Core reusable logic for computing opening, movement, and closing balances
@@ -18,7 +15,7 @@ const normalizeBalanceType = (value = "Debit") =>
  * @returns {number} Net balance for the period
  */
 export const computeMovement = (debitAmount, normalBalance) => {
-  if (normalizeBalanceType(normalBalance) === "Debit") {
+  if (normalBalance === "Debit") {
     return debitAmount || 0;
   } else {
     // Credit balance accounts: debit reduces balance
@@ -44,9 +41,7 @@ export const computeClosingBalance = (
   periodCredit = 0,
   normalBalance = "Debit"
 ) => {
-  const balanceType = normalizeBalanceType(normalBalance);
-
-  if (balanceType === "Debit") {
+  if (normalBalance === "Debit") {
     // For Debit balance accounts:
     // Opening balance = debit - credit
     // Add period movements = debit - credit
@@ -73,7 +68,7 @@ export const computeClosingBalance = (
  * @returns {Object} { debitSide, creditSide }
  */
 export const splitBalance = (balance = 0, normalBalance = "Debit") => {
-  if (normalizeBalanceType(normalBalance) === "Debit") {
+  if (normalBalance === "Debit") {
     return {
       debitSide: balance > 0 ? balance : 0,
       creditSide: balance < 0 ? Math.abs(balance) : 0,
@@ -245,35 +240,27 @@ export const buildAccountBalanceForReport = (
     throw new AppError("Account is required", 400, "buildAccountBalanceForReport");
   }
 
-  const group = typeof account.groupId === "object" ? account.groupId : null;
-  const normalBalance = group?.balanceType || account.groupBalanceType || account.openingType;
-  const scheduleMainHead = account.scheduleMapping?.scheduleMainHead || group?.scheduleMainHead;
-  const scheduleGroup = account.scheduleMapping?.scheduleGroup || group?.scheduleGroup;
-  const scheduleLineItem = account.scheduleMapping?.scheduleLineItem || group?.scheduleLineItem;
-  const groupNature = group?.nature || account.groupNature || null;
-
-  const openingBalance = computeClosingBalance(openingDebit, openingCredit, 0, 0, normalBalance);
+  const openingBalance = computeClosingBalance(openingDebit, openingCredit, 0, 0, account.openingType);
 
   const closingBalance = computeClosingBalance(
     openingDebit,
     openingCredit,
     periodDebit,
     periodCredit,
-    normalBalance
+    account.openingType
   );
 
-  const { debitSide, creditSide } = splitBalance(closingBalance, normalBalance);
+  const { debitSide, creditSide } = splitBalance(closingBalance, account.openingType);
 
   return {
     accountId: account._id,
     accountCode: account.code,
     accountName: account.name,
     groupName: account.groupName,
-    scheduleMainHead,
-    scheduleGroup,
-    scheduleLineItem,
-    normalBalance,
-    groupNature,
+    scheduleMainHead: account.scheduleMapping?.scheduleMainHead,
+    scheduleGroup: account.scheduleMapping?.scheduleGroup,
+    scheduleLineItem: account.scheduleMapping?.scheduleLineItem,
+    normalBalance: account.openingType,
     linkedClientId: account.linkedClientId,
     linkedVendorId: account.linkedVendorId,
     linkedPartyType: account.linkedPartyType,

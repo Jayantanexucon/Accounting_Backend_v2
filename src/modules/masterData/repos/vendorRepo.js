@@ -47,12 +47,11 @@ export const completeVendorRepo = async (id) => {
   }
 };
 
-export const getPaginatedVendorsRepo = async ({ page, limit }) => {
+export const getPaginatedVendorsRepo = async ({ companyId, page, limit }) => {
   try {
     const Vendor = await getVendorModel();
     const skip = (page - 1) * limit;
-    // Always return all vendors (global master data) - no companyId filter
-    const query = {};
+    const query = { companyId };
 
     const totalCount = await Vendor.countDocuments(query);
 
@@ -72,11 +71,10 @@ export const getPaginatedVendorsRepo = async ({ page, limit }) => {
   }
 };
 
-export const searchVendorsRepo = async (searchTerm, filters = {}) => {
+export const searchVendorsRepo = async (companyId, searchTerm, filters = {}) => {
   try {
     const Vendor = await getVendorModel();
-    // Always search all vendors (global master data) - no companyId filter
-    const query = { isActive: true };
+    const query = { companyId, isActive: true };
 
     if (searchTerm) {
       query.$or = [

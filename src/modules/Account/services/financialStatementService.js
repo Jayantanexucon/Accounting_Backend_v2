@@ -26,7 +26,7 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
   // Get trial balance
   const trialBalance = await getTrialBalance(companyId, asOfDate, {
     groupByScheduleHead: true,
-    includeZeroBalance: true,
+    includeZeroBalance: false,
   });
 
   // Filter and group accounts by sheet section
@@ -38,16 +38,8 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
     if (!account.scheduleMainHead) continue;
 
     const accountLine = {
-      accountId: account.accountId,
       code: account.accountCode,
       name: account.accountName,
-      groupName: account.groupName,
-      normalBalance: account.normalBalance,
-      openingBalance: account.openingBalance || 0,
-      linkedClientId: account.linkedClientId,
-      linkedVendorId: account.linkedVendorId,
-      linkedPartyType: account.linkedPartyType,
-      partyName: account.partyName,
       scheduleGroup: account.scheduleGroup,
       scheduleLineItem: account.scheduleLineItem,
       amount: account.closingDebit || account.closingCredit || 0,
@@ -58,7 +50,7 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
         assets.push(accountLine);
         break;
       case "Equity and Liabilities":
-        if (account.groupNature === "Equity") {
+        if (account.groupName && account.groupName.includes("Equity")) {
           equity.push(accountLine);
         } else {
           liabilities.push(accountLine);
@@ -69,64 +61,36 @@ export const getBalanceSheet = async (companyId, asOfDate, options = {}) => {
     }
   }
 
-  // Aggregate by schedule group and line item
+  // Aggregate by schedule group (Current vs Non-Current)
   const groupAssets = {};
   const groupLiabilities = {};
   const groupEquity = {};
 
-  // Initialize all standard groups and line items from config
-  const initializeSections = (nature, target) => {
-    const config = SCHEDULE_III_CONFIG[nature];
-    if (!config) return;
-    for (const [groupName, lineItems] of Object.entries(config.groups)) {
-      target[groupName] = { total: 0, items: [], lineItems: {} };
-      for (const lineItem of lineItems) {
-        target[groupName].lineItems[lineItem] = { total: 0, items: [] };
-      }
-    }
-  };
-
-  initializeSections("Asset", groupAssets);
-  initializeSections("Liability", groupLiabilities);
-  initializeSections("Equity", groupEquity);
-
   for (const asset of assets) {
-    const group = asset.scheduleGroup || "Other Current Assets";
-    const lineItem = asset.scheduleLineItem || "Other Current Assets";
-    
-    if (!groupAssets[group]) groupAssets[group] = { total: 0, items: [], lineItems: {} };
-    if (!groupAssets[group].lineItems[lineItem]) groupAssets[group].lineItems[lineItem] = { total: 0, items: [] };
-    
+    const group = asset.scheduleGroup || "Other";
+    if (!groupAssets[group]) {
+      groupAssets[group] = { total: 0, items: [] };
+    }
     groupAssets[group].items.push(asset);
     groupAssets[group].total += asset.amount;
-    groupAssets[group].lineItems[lineItem].items.push(asset);
-    groupAssets[group].lineItems[lineItem].total += asset.amount;
   }
 
   for (const liability of liabilities) {
-    const group = liability.scheduleGroup || "Other Current Liabilities";
-    const lineItem = liability.scheduleLineItem || "Other Current Liabilities";
-
-    if (!groupLiabilities[group]) groupLiabilities[group] = { total: 0, items: [], lineItems: {} };
-    if (!groupLiabilities[group].lineItems[lineItem]) groupLiabilities[group].lineItems[lineItem] = { total: 0, items: [] };
-
+    const group = liability.scheduleGroup || "Other";
+    if (!groupLiabilities[group]) {
+      groupLiabilities[group] = { total: 0, items: [] };
+    }
     groupLiabilities[group].items.push(liability);
     groupLiabilities[group].total += liability.amount;
-    groupLiabilities[group].lineItems[lineItem].items.push(liability);
-    groupLiabilities[group].lineItems[lineItem].total += liability.amount;
   }
 
   for (const eq of equity) {
     const group = eq.scheduleGroup || "Shareholders' Funds";
-    const lineItem = eq.scheduleLineItem || "Reserves and Surplus";
-
-    if (!groupEquity[group]) groupEquity[group] = { total: 0, items: [], lineItems: {} };
-    if (!groupEquity[group].lineItems[lineItem]) groupEquity[group].lineItems[lineItem] = { total: 0, items: [] };
-
+    if (!groupEquity[group]) {
+      groupEquity[group] = { total: 0, items: [] };
+    }
     groupEquity[group].items.push(eq);
     groupEquity[group].total += eq.amount;
-    groupEquity[group].lineItems[lineItem].items.push(eq);
-    groupEquity[group].lineItems[lineItem].total += eq.amount;
   }
 
   const totalAssets = assets.reduce((sum, a) => sum + a.amount, 0);
@@ -192,40 +156,31 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   // Get trial balance for the period
   const tb = await getTrialBalanceForPeriod(companyId, startDate, endDate, {
     groupByScheduleHead: true,
-    includeZeroBalance: true,
+    includeZeroBalance: false,
   });
 
-  // Filter P&L accounts. Nature is the primary section classifier;
-  // schedule fields only determine grouping inside that section.
+  // Filter P&L accounts
   const revenue = [];
   const expenses = [];
 
   for (const account of tb.accounts) {
-    if (!["Income", "Expense"].includes(account.groupNature)) continue;
+    if (account.scheduleMainHead !== "P&L") continue;
 
     const accountLine = {
-      accountId: account.accountId,
       code: account.accountCode,
       name: account.accountName,
-      groupName: account.groupName,
-      normalBalance: account.normalBalance,
-      openingBalance: account.openingBalance || 0,
-      linkedClientId: account.linkedClientId,
-      linkedVendorId: account.linkedVendorId,
-      linkedPartyType: account.linkedPartyType,
-      partyName: account.partyName,
-      groupNature: account.groupNature,
-      scheduleGroup: account.scheduleGroup,
       scheduleLineItem: account.scheduleLineItem,
       amount: account.periodDebit || account.periodCredit || 0,
       debit: account.periodDebit || 0,
       credit: account.periodCredit || 0,
     };
 
-    if (account.groupNature === "Income") {
+    // Income accounts are credit balance accounts (positive credit = income)
+    // Expense accounts are debit balance accounts (positive debit = expense)
+    if (account.groupName && account.groupName.match(/income|revenue/i)) {
       accountLine.amount = account.periodCredit || 0;
       revenue.push(accountLine);
-    } else if (account.groupNature === "Expense") {
+    } else {
       accountLine.amount = account.periodDebit || 0;
       expenses.push(accountLine);
     }
@@ -234,51 +189,21 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   // Aggregate by schedule line item
   const groupRevenue = {};
   const groupExpenses = {};
-  const revenueByScheduleGroup = {};
-  const expensesByScheduleGroup = {};
-
-  // Initialize standard line items
-  for (const item of SCHEDULE_III_CONFIG.Income.groups.Revenue) {
-    groupRevenue[item] = [];
-  }
-  for (const item of SCHEDULE_III_CONFIG.Expense.groups.Expenses) {
-    groupExpenses[item] = [];
-  }
 
   for (const rev of revenue) {
-    const scheduleGroup = rev.scheduleGroup || "Revenue";
     const lineItem = rev.scheduleLineItem || "Other Income";
     if (!groupRevenue[lineItem]) {
       groupRevenue[lineItem] = [];
     }
     groupRevenue[lineItem].push(rev);
-    if (!revenueByScheduleGroup[scheduleGroup]) {
-      revenueByScheduleGroup[scheduleGroup] = { total: 0, lineItems: {} };
-    }
-    if (!revenueByScheduleGroup[scheduleGroup].lineItems[lineItem]) {
-      revenueByScheduleGroup[scheduleGroup].lineItems[lineItem] = { total: 0, items: [] };
-    }
-    revenueByScheduleGroup[scheduleGroup].total += rev.amount;
-    revenueByScheduleGroup[scheduleGroup].lineItems[lineItem].total += rev.amount;
-    revenueByScheduleGroup[scheduleGroup].lineItems[lineItem].items.push(rev);
   }
 
   for (const exp of expenses) {
-    const scheduleGroup = exp.scheduleGroup || "Expenses";
     const lineItem = exp.scheduleLineItem || "Other Expenses";
     if (!groupExpenses[lineItem]) {
       groupExpenses[lineItem] = [];
     }
     groupExpenses[lineItem].push(exp);
-    if (!expensesByScheduleGroup[scheduleGroup]) {
-      expensesByScheduleGroup[scheduleGroup] = { total: 0, lineItems: {} };
-    }
-    if (!expensesByScheduleGroup[scheduleGroup].lineItems[lineItem]) {
-      expensesByScheduleGroup[scheduleGroup].lineItems[lineItem] = { total: 0, items: [] };
-    }
-    expensesByScheduleGroup[scheduleGroup].total += exp.amount;
-    expensesByScheduleGroup[scheduleGroup].lineItems[lineItem].total += exp.amount;
-    expensesByScheduleGroup[scheduleGroup].lineItems[lineItem].items.push(exp);
   }
 
   // Calculate totals
@@ -293,12 +218,10 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
       endDate,
     },
     revenue: {
-      groups: revenueByScheduleGroup,
       lineItems: groupRevenue,
       total: totalRevenue,
     },
     expenses: {
-      groups: expensesByScheduleGroup,
       lineItems: groupExpenses,
       total: totalExpenses,
     },

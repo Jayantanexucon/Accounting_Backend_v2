@@ -7,7 +7,7 @@ const router = express.Router();
 // Register PO routes under /purchase-order
 router.use("/purchase-order", purchaseOrderRoutes);
 
-// Register Invoice routes directly (no /invoice prefix since it's already at /api/invoices)
-router.use("/", invoiceRoutes);
+// Register Invoice routes under /invoice
+router.use("/invoice", invoiceRoutes);
 
 export default router;

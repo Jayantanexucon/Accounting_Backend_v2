@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectUserDB } from "../../../config/db/user.db.js";
 
 const refreshTokenSchema = new mongoose.Schema({
   tokenHash: { type: String, required: true, index: true },
@@ -23,6 +23,6 @@ refreshTokenSchema.virtual("isActive").get(function () {
 });
 
 export const getRefreshTokenModel = async () => {
-  const db = getDatabase("user");
+  const db = await connectUserDB();
   return db.models.RefreshToken || db.model("RefreshToken", refreshTokenSchema);
 };

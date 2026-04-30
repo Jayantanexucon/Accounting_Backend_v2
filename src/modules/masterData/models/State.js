@@ -1,5 +1,5 @@
 import mongoose, { Schema } from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectMasterDB } from "../../../config/db/master.db.js";
 
 const StateSchema = new mongoose.Schema(
   {
@@ -12,11 +12,6 @@ const StateSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-    },
-    gstStateCode: {
-      type: String,
-      trim: true,
-      default: "",
     },
     country: {
       type: Schema.Types.ObjectId,
@@ -43,6 +38,6 @@ const StateSchema = new mongoose.Schema(
 StateSchema.index({ country: 1, stateCode: 1 }, { unique: true });
 
 export const getStateModel = async () => {
-  const db = getDatabase("master");
+  const db = await connectMasterDB();
   return db.models.State || db.model("State", StateSchema);
 };

@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { getDatabase } from "../../../config/databases.js";
+import { connectAccountingDB } from "../../../config/db/accounting.db.js";
 
 const groupSchema = new mongoose.Schema(
   {
@@ -74,16 +74,19 @@ const groupSchema = new mongoose.Schema(
       },
     },
     companyId: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
       required: [true, "Company ID is required"],
       indexed: true,
     },
     createdBy: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       required: true,
     },
     updatedBy: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
     isActive: {
       type: Boolean,
@@ -98,31 +101,27 @@ const groupSchema = new mongoose.Schema(
 // Unique index on name + companyId
 groupSchema.index({ name: 1, companyId: 1 }, { unique: true });
 
-// Derive schedule mapping during validation without callback-style middleware.
-groupSchema.pre("validate", function () {
-  if (this.scheduleMainHead && this.scheduleLineItem) {
-    this.scheduleMapping = {
-      reportType: this.scheduleMainHead === "P&L" ? "profit_and_loss" : "balance_sheet",
-      primaryHead: this.scheduleMainHead,
-      subHead: this.scheduleGroup,
-      lineItemCode: this.scheduleLineItem,
-      lineItemName: this.scheduleLineItem,
-      noteNo: this.noteNo || null,
-    };
-    return;
+// Pre-validate hook to ensure Schedule III mapping consistency
+groupSchema.pre("validate", function (next) {
+  try {
+    // Derive scheduleMapping from Schedule III fields
+    if (this.scheduleMainHead && this.scheduleLineItem) {
+      this.scheduleMapping = {
+        reportType: this.scheduleMainHead === "P&L" ? "profit_and_loss" : "balance_sheet",
+        primaryHead: this.scheduleMainHead,
+        subHead: this.scheduleGroup,
+        lineItemCode: this.scheduleLineItem,
+        lineItemName: this.scheduleLineItem,
+        noteNo: this.noteNo || null,
+      };
+    }
+    next();
+  } catch (error) {
+    next(error);
   }
-
-  this.scheduleMapping = {
-    reportType: null,
-    primaryHead: null,
-    subHead: null,
-    lineItemCode: null,
-    lineItemName: null,
-    noteNo: this.noteNo || null,
-  };
 });
 
 export const getGroupModel = async () => {
-  const db = getDatabase("accounting");
+  const db = await connectAccountingDB();
   return db.models.Group || db.model("Group", groupSchema);
 };

@@ -4,9 +4,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "test": "echo \"No tests specified yet\" && exit 0"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon src/server.js"
   },
   "keywords": [],
   "author": "",
@@ -17,25 +16,18 @@
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
-    "docxtemplater": "^3.68.5",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "libreoffice-convert": "^1.8.1",
-    "mammoth": "^1.12.0",
     "mongoose": "^9.3.2",
     "multer": "^2.1.1",
-    "nodemailer": "^8.0.5",
+    "nodemailer": "^6.9.7",
     "passport": "^0.7.0",
     "passport-azure-ad": "^4.3.5",
-    "pdf-lib": "^1.17.1",
     "pdfkit": "^0.13.0",
-    "pizzip": "^3.2.0",
-    "pug": "^3.0.3",
-    "xlsx": "^0.18.5"
+    "pug": "^3.0.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
-  },
-  "packageManager": "pnpm@10.11.0+sha512.6540583f41cc5f628eb3d9773ecee802f4f9ef9923cc45b69890fb47991d4b092964694ec3a4f738a420c918a333062c8b925d312f42e4f0c263eb603551f977"
+  }
 }

@@ -19,26 +19,26 @@ const router = express.Router();
 
 router.use(protect);
 
-router.post("/", accessControlMiddleware({ entityKey: "PAYMENT", action: "CREATE" }), createPayment);
+router.post("/", accessControlMiddleware({ entityKey: "Payment", action: "CREATE" }), createPayment);
 
-router.get("/", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getAllPayments);
+router.get("/", getAllPayments);
 
-router.get("/stats/overview", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getPaymentStats);
+router.get("/stats/overview", getPaymentStats);
 
-router.get("/client/search", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getPaymentsByClient);
+router.get("/client/search", getPaymentsByClient);
 
-router.get("/invoice/search", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getPaymentsByInvoice);
+router.get("/invoice/search", getPaymentsByInvoice);
 
-router.get("/reconcile/pending", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getPendingReconciliations);
+router.get("/reconcile/pending", getPendingReconciliations);
 
-router.get("/report/tds", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getTDSReport);
+router.get("/report/tds", getTDSReport);
 
-router.get("/:id", accessControlMiddleware({ entityKey: "PAYMENT", action: "VIEW" }), getPaymentById);
+router.get("/:id", getPaymentById);
 
-router.put("/:id", accessControlMiddleware({ entityKey: "PAYMENT", action: "EDIT" }), updatePayment);
+router.put("/:id", accessControlMiddleware({ entityKey: "Payment", action: "UPDATE" }), updatePayment);
 
-router.post("/:id/reconcile", accessControlMiddleware({ entityKey: "PAYMENT", action: "EDIT" }), reconcilePayment);
+router.post("/:id/reconcile", accessControlMiddleware({ entityKey: "Payment", action: "RECONCILE" }), reconcilePayment);
 
-router.delete("/:id", accessControlMiddleware({ entityKey: "PAYMENT", action: "DELETE" }), deletePayment);
+router.delete("/:id", accessControlMiddleware({ entityKey: "Payment", action: "DELETE" }), deletePayment);
 
 export default router;

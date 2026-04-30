@@ -1,7 +1,5 @@
 import AppError from "../../../utils/AppError.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
-import { getJournalModel } from "../models/Journal.js";
-import { BankReconciliationService } from "../services/bankReconciliationService.js";
 
 export const createJournalLineRepo = async (lineData) => {
   try {
@@ -34,19 +32,6 @@ export const createMultipleJournalLinesRepo = async (linesData) => {
   try {
     const JournalLine = await getJournalLineModel();
     const lines = await JournalLine.insertMany(linesData);
-
-    if (lines.length > 0) {
-      const Journal = await getJournalModel();
-      const journal = await Journal.findById(lines[0].journalId).lean();
-      if (journal) {
-        await BankReconciliationService.processJournalForReconciliation(
-          journal,
-          lines,
-          lines[0].companyId
-        );
-      }
-    }
-
     return lines;
   } catch (error) {
     throw new AppError(

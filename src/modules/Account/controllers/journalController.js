@@ -11,228 +11,37 @@ import {
   getJournalsByApprovalStatusRepo,
 } from "../repos/journalRepo.js";
 import { createMultipleJournalLinesRepo, deleteJournalLinesByJournalRepo } from "../repos/journalLineRepo.js";
-import { getBankLedgerTransactionModel } from "../models/BankLedgerTransaction.js";
-import { getBankReconciliationAllocationModel } from "../models/BankReconciliationAllocation.js";
-import { BankReconciliationService } from "../services/bankReconciliationService.js";
-import {
-  createJournalApprovalRequestRepo,
-  findPendingApprovalForJournalRepo,
-  getJournalApprovalRequestByIdRepo,
-  getJournalApprovalRequestsRepo,
-  updateJournalApprovalRequestRepo,
-} from "../repos/journalApprovalRequestRepo.js";
-import { getAccountsRepo } from "../repos/accountRepo.js";
-
-const VALID_VOUCHER_TYPES = ["SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"];
-
-const normalizeVoucherType = (value = "") => {
-  const normalized = String(value).trim().toUpperCase();
-  const mappedValue =
-    {
-      "JOURNAL ENTRY": "JOURNAL",
-      JOURNAL: "JOURNAL",
-      RECEIPT: "RECEIPT",
-      PAYMENT: "PAYMENT",
-      CONTRA: "CONTRA",
-      SALES: "SALES",
-      PURCHASE: "PURCHASE",
-    }[normalized] || normalized;
-
-  if (!VALID_VOUCHER_TYPES.includes(mappedValue)) {
-    throw new AppError(
-      `Invalid voucherType. Expected one of: ${VALID_VOUCHER_TYPES.join(", ")}`,
-      400,
-      "normalizeVoucherType"
-    );
-  }
-
-  return mappedValue;
-};
-
-const normalizeJournalLines = (lines = []) =>
-  lines.map((line, index) => ({
-    ...line,
-    accountId: line.accountId || line.account?._id || line.account,
-    debitAmount: Number(line.debitAmount ?? line.debit ?? 0),
-    creditAmount: Number(line.creditAmount ?? line.credit ?? 0),
-    description: line.description || line.memo || "",
-    lineNumber: Number(line.lineNumber || index + 1),
-  }));
-
-const validateJournalLines = (lines = []) => {
-  if (!Array.isArray(lines) || lines.length < 2) {
-    throw new AppError("At least 2 journal lines are required", 400, "validateJournalLines");
-  }
-
-  let totalDebit = 0;
-  let totalCredit = 0;
-
-  lines.forEach((line, index) => {
-    if (!line.accountId) {
-      throw new AppError(`Account is required for line ${index + 1}`, 400, "validateJournalLines");
-    }
-    if (line.debitAmount < 0 || line.creditAmount < 0) {
-      throw new AppError(`Negative amounts are not allowed on line ${index + 1}`, 400, "validateJournalLines");
-    }
-    if (line.debitAmount === 0 && line.creditAmount === 0) {
-      throw new AppError(
-        `Either debit or credit amount is required on line ${index + 1}`,
-        400,
-        "validateJournalLines"
-      );
-    }
-    if (line.debitAmount > 0 && line.creditAmount > 0) {
-      throw new AppError(
-        `A line cannot contain both debit and credit amounts on line ${index + 1}`,
-        400,
-        "validateJournalLines"
-      );
-    }
-
-    totalDebit += line.debitAmount;
-    totalCredit += line.creditAmount;
-  });
-
-  if (Math.abs(totalDebit - totalCredit) > 0.001) {
-    throw new AppError("Journal entry is not balanced", 400, "validateJournalLines");
-  }
-
-  return { totalDebit, totalCredit };
-};
-
-const enrichJournalLines = async (lines = [], companyId) => {
-  const accountIds = [...new Set(lines.map((line) => String(line.accountId || "")).filter(Boolean))];
-  const accounts = await getAccountsRepo({
-    companyId,
-    _id: { $in: accountIds },
-  });
-
-  const accountMap = new Map(accounts.map((account) => [String(account._id), account]));
-
-  return lines.map((line, index) => {
-    const account = accountMap.get(String(line.accountId));
-    if (!account) {
-      throw new AppError(`Account not found for line ${index + 1}`, 400, "enrichJournalLines");
-    }
-
-    return {
-      ...line,
-      accountId: account._id,
-      accountCode: line.accountCode || account.code,
-      accountName: line.accountName || account.name,
-    };
-  });
-};
-
-const applyJournalUpdate = async (id, payload, userId) => {
-  const oldJournal = await getJournalByIdRepo(id);
-  if (!oldJournal) {
-    throw new AppError("Journal not found", 404, "applyJournalUpdate");
-  }
-
-  const companyId = payload.companyId || oldJournal.companyId;
-  const updateData = {
-    updatedBy: userId,
-  };
-
-  if (payload.voucherType !== undefined) updateData.voucherType = normalizeVoucherType(payload.voucherType);
-  if (payload.date !== undefined) updateData.date = new Date(payload.date);
-  if (payload.referenceNumber !== undefined) updateData.referenceNumber = payload.referenceNumber;
-  if (payload.externalDocNo !== undefined) updateData.externalDocNo = payload.externalDocNo;
-  if (payload.narration !== undefined) updateData.narration = payload.narration;
-  if (payload.sourceType !== undefined) updateData.sourceType = payload.sourceType;
-  if (payload.sourceId !== undefined) updateData.sourceId = payload.sourceId;
-  if (payload.partyName !== undefined) updateData.partyName = payload.partyName;
-
-  if (payload.lines !== undefined) {
-    const BankLedgerTransaction = await getBankLedgerTransactionModel();
-    const Allocation = await getBankReconciliationAllocationModel();
-    const normalizedLines = normalizeJournalLines(payload.lines);
-    const enrichedLines = await enrichJournalLines(normalizedLines, companyId);
-    const { totalDebit, totalCredit } = validateJournalLines(enrichedLines);
-
-    updateData.totalDebit = totalDebit;
-    updateData.totalCredit = totalCredit;
-
-    const existingBankLedgerTransactions = await BankLedgerTransaction.find({
-      companyId,
-      journalId: id,
-    }).lean();
-    const existingBankLedgerTransactionIds = existingBankLedgerTransactions.map((item) => item._id);
-    const relatedAllocations = existingBankLedgerTransactionIds.length
-      ? await Allocation.find({
-          companyId,
-          bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
-        }).lean()
-      : [];
-    const affectedBankTransactionIds = [
-      ...new Set(relatedAllocations.map((item) => String(item.bankTransactionId)).filter(Boolean)),
-    ];
-
-    if (existingBankLedgerTransactionIds.length > 0) {
-      await Allocation.deleteMany({
-        companyId,
-        bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
-      });
-      await BankLedgerTransaction.deleteMany({
-        companyId,
-        journalId: id,
-      });
-    }
-
-    await deleteJournalLinesByJournalRepo(id);
-    await createMultipleJournalLinesRepo(
-      enrichedLines.map((line) => ({
-        journalId: id,
-        accountId: line.accountId,
-        accountCode: line.accountCode,
-        accountName: line.accountName,
-        companyId,
-        debitAmount: line.debitAmount || 0,
-        creditAmount: line.creditAmount || 0,
-        description: line.description,
-        linkedToClientId: line.linkedToClientId || null,
-        linkedToVendorId: line.linkedToVendorId || null,
-        lineNumber: line.lineNumber,
-      }))
-    );
-
-    for (const bankTransactionId of affectedBankTransactionIds) {
-      await BankReconciliationService.syncAllocationStatus(bankTransactionId, null);
-    }
-  }
-
-  await updateJournalRepo(id, updateData);
-  const updatedJournal = await getJournalByIdRepo(id);
-
-  return { updatedJournal, updateData, oldJournal };
-};
 
 const generateJournalNumber = async (companyId, voucherType) => {
+  const db = require("../models/Journal.js");
   const timestamp = Date.now();
-  return `${String(voucherType || "JOURNAL").replace(/\s+/g, "-").toUpperCase()}-${companyId}-${timestamp}`;
+  return `${voucherType}-${companyId}-${timestamp}`;
 };
 
 export const createJournal = async (req, res, next) => {
   try {
-    const { voucherType, date, referenceNumber, externalDocNo, narration, companyId, sourceType, sourceId, partyName, lines } =
+    const { voucherType, date, referenceNumber, narration, companyId, sourceType, sourceId, partyName, lines } =
       req.body;
 
     if (!voucherType || !date || !companyId || !lines || lines.length === 0) {
       throw new AppError("Missing required fields: voucherType, date, companyId, lines", 400, "createJournal");
     }
 
-    const normalizedVoucherType = normalizeVoucherType(voucherType);
-    const normalizedLines = await enrichJournalLines(normalizeJournalLines(lines), companyId);
-    const journalNumber = await generateJournalNumber(companyId, normalizedVoucherType);
-    const { totalDebit, totalCredit } = validateJournalLines(normalizedLines);
+    const journalNumber = await generateJournalNumber(companyId, voucherType);
+
+    let totalDebit = 0;
+    let totalCredit = 0;
+
+    lines.forEach((line) => {
+      totalDebit += line.debitAmount || 0;
+      totalCredit += line.creditAmount || 0;
+    });
 
     const journalData = {
       number: journalNumber,
-      voucherType: normalizedVoucherType,
+      voucherType,
       date: new Date(date),
       referenceNumber,
-      externalDocNo,
       narration,
       companyId,
       sourceType: sourceType || "MANUAL",
@@ -240,14 +49,13 @@ export const createJournal = async (req, res, next) => {
       partyName,
       totalDebit,
       totalCredit,
-      status: "Posted",
-      approvalStatus: "Approved",
-      createdBy: req.user?.id,
+      status: "Draft",
+      approvalStatus: "Pending",
     };
 
     const journal = await createJournalRepo(journalData);
 
-    const journalLinesData = normalizedLines.map((line) => ({
+    const journalLinesData = lines.map((line) => ({
       journalId: journal._id,
       accountId: line.accountId,
       accountCode: line.accountCode,
@@ -338,11 +146,15 @@ export const getJournalById = async (req, res, next) => {
 export const updateJournal = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const updateData = req.body;
+
     if (!id) {
       throw new AppError("Journal ID is required", 400, "updateJournal");
     }
 
-    const { updatedJournal, updateData, oldJournal } = await applyJournalUpdate(id, req.body, req.user?.id);
+    const oldJournal = await getJournalByIdRepo(id);
+
+    const updatedJournal = await updateJournalRepo(id, updateData);
 
     await createAuditLog({
       userId: req.user?.id,
@@ -510,155 +322,6 @@ export const getPendingApprovals = async (req, res, next) => {
       statusCode: 200,
       data: journals,
       message: "Pending approvals retrieved successfully",
-    }).send(res);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const getJournalApprovalRequests = async (req, res, next) => {
-  try {
-    const companyId = req.query.companyId;
-
-    if (!companyId) {
-      throw new AppError("companyId is required", 400, "getJournalApprovalRequests");
-    }
-
-    const requests = await getJournalApprovalRequestsRepo({ companyId });
-
-    new ApiResponse({
-      statusCode: 200,
-      data: requests,
-      message: "Journal approval requests retrieved successfully",
-    }).send(res);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const requestJournalEditApproval = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { companyId, requestComment = "" } = req.body;
-
-    if (!id || !companyId) {
-      throw new AppError("journalId and companyId are required", 400, "requestJournalEditApproval");
-    }
-
-    const journal = await getJournalByIdRepo(id);
-    if (!journal || String(journal.companyId) !== String(companyId)) {
-      throw new AppError("Journal not found", 404, "requestJournalEditApproval");
-    }
-
-    const pending = await findPendingApprovalForJournalRepo(companyId, id, "edit");
-    if (pending) {
-      throw new AppError("An edit approval request is already pending for this journal", 400, "requestJournalEditApproval");
-    }
-
-    const request = await createJournalApprovalRequestRepo({
-      companyId,
-      journalId: id,
-      journalNumber: journal.number,
-      type: "edit",
-      requestedBy: req.user?.id,
-      requestComment,
-      requestedPayload: req.body,
-    });
-
-    new ApiResponse({
-      statusCode: 201,
-      data: request,
-      message: "Journal edit approval request created successfully",
-    }).send(res);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const requestJournalDeleteApproval = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { companyId, requestComment = "" } = req.body;
-
-    if (!id || !companyId) {
-      throw new AppError("journalId and companyId are required", 400, "requestJournalDeleteApproval");
-    }
-
-    const journal = await getJournalByIdRepo(id);
-    if (!journal || String(journal.companyId) !== String(companyId)) {
-      throw new AppError("Journal not found", 404, "requestJournalDeleteApproval");
-    }
-
-    const pending = await findPendingApprovalForJournalRepo(companyId, id, "delete");
-    if (pending) {
-      throw new AppError("A delete approval request is already pending for this journal", 400, "requestJournalDeleteApproval");
-    }
-
-    const request = await createJournalApprovalRequestRepo({
-      companyId,
-      journalId: id,
-      journalNumber: journal.number,
-      type: "delete",
-      requestedBy: req.user?.id,
-      requestComment,
-      requestedPayload: null,
-    });
-
-    new ApiResponse({
-      statusCode: 201,
-      data: request,
-      message: "Journal delete approval request created successfully",
-    }).send(res);
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const updateJournalApprovalRequest = async (req, res, next) => {
-  try {
-    const { requestId } = req.params;
-    const { status } = req.body;
-
-    if (!requestId || !status) {
-      throw new AppError("requestId and status are required", 400, "updateJournalApprovalRequest");
-    }
-
-    if (!["approved", "rejected"].includes(status)) {
-      throw new AppError("Invalid approval status", 400, "updateJournalApprovalRequest");
-    }
-
-    const approvalRequest = await getJournalApprovalRequestByIdRepo(requestId);
-    if (!approvalRequest) {
-      throw new AppError("Approval request not found", 404, "updateJournalApprovalRequest");
-    }
-
-    if (approvalRequest.status !== "pending") {
-      throw new AppError("Approval request has already been processed", 400, "updateJournalApprovalRequest");
-    }
-
-    if (status === "approved") {
-      if (approvalRequest.type === "delete") {
-        await deleteJournalLinesByJournalRepo(approvalRequest.journalId);
-        await deleteJournalRepo(approvalRequest.journalId);
-      } else if (approvalRequest.type === "edit" && approvalRequest.requestedPayload) {
-        const payload = { ...approvalRequest.requestedPayload };
-        delete payload.companyId;
-        delete payload.requestComment;
-        await updateJournalRepo(approvalRequest.journalId, payload);
-      }
-    }
-
-    const updatedRequest = await updateJournalApprovalRequestRepo(requestId, {
-      status: status === "approved" ? "completed" : "rejected",
-      ...(status === "approved"
-        ? { approvedBy: req.user?.id, approvedAt: new Date(), completedAt: new Date() }
-        : { rejectedBy: req.user?.id, rejectedAt: new Date() }),
-    });
-
-    new ApiResponse({
-      statusCode: 200,
-      data: updatedRequest,
-      message: `Journal approval request ${status} successfully`,
     }).send(res);
   } catch (error) {
     next(error);
