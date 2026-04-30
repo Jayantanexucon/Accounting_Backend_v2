@@ -24,10 +24,65 @@ import {
 } from "../repos/purchaseOrderRepo.js";
 import { getInvoicesByPORepo } from "../repos/invoiceRepo.js";
 import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
+import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
 
-const generatePONumber = async (companyId) => {
-  const timestamp = Date.now();
-  return `PO-${companyId.toString().slice(-4)}-${timestamp}`;
+/**
+ * Extract first 3-4 letters from vendor name
+ * @param {string} vendorName - Full vendor name
+ * @returns {string} - 3-4 letter code (uppercase)
+ */
+const extractClientCode = (vendorName = "") => {
+  const cleaned = String(vendorName || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  
+  // Return first 4 letters/numbers, or at least 3 if available
+  return cleaned.substring(0, 4) || "CLIE";
+};
+
+/**
+ * Generate unique PO number with format: PO-YYYYMMDD-CLIENT-XXXX
+ * @param {string} companyId - Company ID
+ * @param {string} vendorName - Vendor/Client name
+ * @param {Date} poDate - Purchase order date
+ * @returns {string} - Generated PO number
+ */
+const generatePONumber = async (companyId, vendorName = "", poDate = new Date()) => {
+  try {
+    // Format date as YYYYMMDD
+    const date = new Date(poDate);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const dateStr = `${year}${month}${day}`;
+    
+    // Extract client code (first 3-4 letters)
+    const clientCode = extractClientCode(vendorName);
+    
+    // Get count of POs for this company on this date to generate unique number
+    const PurchaseOrder = await getPurchaseOrderModel();
+    const startOfDay = new Date(year, date.getMonth(), date.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(year, date.getMonth(), date.getDate(), 23, 59, 59, 999);
+    
+    const countToday = await PurchaseOrder.countDocuments({
+      companyId: companyId,
+      poDate: {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      },
+    });
+    
+    // Sequential number: pad with zeros (e.g., 0001, 0002)
+    const sequenceNumber = String(countToday + 1).padStart(4, "0");
+    
+    return `PO-${dateStr}-${clientCode}-${sequenceNumber}`;
+  } catch (error) {
+    console.error("Error generating PO number:", error);
+    // Fallback to timestamp-based format
+    const timestamp = Date.now();
+    return `PO-${companyId.toString().slice(-4)}-${timestamp}`;
+  }
 };
 
 // Map the new paymentTerms value to the legacy billingModel field
@@ -99,40 +154,46 @@ export const createPurchaseOrder = async (req, res, next) => {
       getCompanyBasedGstSplit(company, vendor) || getGstSplit(vendor, deliverTo);
     const normalizedItems = Array.isArray(items)
       ? items.map((item) => {
-          const normalizedTax = normalizeLineItemTax(item, {
-            taxType: req.body.taxType,
-            taxLabel: req.body.taxLabel,
-            gstSplit,
-          });
-          const taxableValue = Number(item.taxableValue) || 0;
-          const totalAmountValue =
-            Number(item.totalAmount) ||
-            Number(item.total) ||
-            taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
-            0;
+        const normalizedTax = normalizeLineItemTax(item, {
+          taxType: req.body.taxType,
+          taxLabel: req.body.taxLabel,
+          gstSplit,
+        });
+        const taxableValue = Number(item.taxableValue) || 0;
+        const totalAmountValue =
+          Number(item.totalAmount) ||
+          Number(item.total) ||
+          taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
+          0;
 
-          totalTaxableValue += taxableValue;
-          totalAmount += totalAmountValue;
+        totalTaxableValue += taxableValue;
+        totalAmount += totalAmountValue;
 
-          return {
-            ...item,
-            hsnId: item.hsnId ? String(item.hsnId) : undefined,
-            hsnSac: item.hsnSac || "",
-            unit: item.unit || "each",
-            quantity: Number(item.quantity) || 0,
-            rate: Number(item.rate) || 0,
-            taxableValue,
-            totalAmount: totalAmountValue,
-            ...normalizedTax,
-          };
-        })
+        return {
+          ...item,
+          hsnId: item.hsnId ? String(item.hsnId) : undefined,
+          hsnSac: item.hsnSac || "",
+          unit: item.unit || "each",
+          quantity: Number(item.quantity) || 0,
+          rate: Number(item.rate) || 0,
+          taxableValue,
+          totalAmount: totalAmountValue,
+          ...normalizedTax,
+          // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
+          taxRate: normalizedTax.taxRate,
+          taxAmount: normalizedTax.taxAmount,
+          gstRate: normalizedTax.gstRate,
+          gstAmount: normalizedTax.gstAmount,
+          combinedTaxRate: normalizedTax.combinedTaxRate,
+        };
+      })
       : [];
 
     const computedTaxMeta = buildTaxMeta({
       taxType: req.body.taxType,
       taxLabel: req.body.taxLabel,
-      taxSummary: req.body.taxSummary,
-      totalTaxAmount: req.body.totalTaxAmount,
+      taxSummary: undefined, // Let it recalculate from items
+      totalTaxAmount: undefined, // ← Don't pass frontend value, recalculate from items
       items: normalizedItems,
     });
 
@@ -154,7 +215,7 @@ export const createPurchaseOrder = async (req, res, next) => {
       }))
       : [];
 
-    const poNumber = await generatePONumber(companyId);
+    const poNumber = await generatePONumber(companyId, vendor?.name || "", poDate);
 
     const poData = {
       companyId,
@@ -298,35 +359,80 @@ export const updatePurchaseOrder = async (req, res, next) => {
     // Normalize milestones if present
     if (Array.isArray(updateData.milestones)) {
       updateData.milestones = updateData.milestones.map((m, index) => ({
-        ...m,
+        ...m, 
         milestoneNo: m.milestoneNo || index + 1,
         status: m.status || "pending",
       }));
     }
 
-    // Normalize hsnId to String on items
+    if (updateData.paymentTerms && updateData.paymentTerms !== oldPO.paymentTerms) {
+      if (updateData.paymentTerms !== "milestone") {
+        // Switching away from milestone → wipe milestones
+        updateData.milestones = [];
+      } else {
+        // Switching to milestone → wipe schedule-based fields
+        updateData.invoiceSchedule = null;
+        updateData.paymentSchedule = null;
+      }
+    }
+
+    // Normalize hsnId to String on items and recalculate totals
+    let totalTaxableValue = 0;
+    let totalAmount = 0;
+
     if (Array.isArray(updateData.items)) {
       const gstSplit =
         getCompanyBasedGstSplit(company, updateData.vendor || oldPO.vendor) ||
         getGstSplit(updateData.vendor || oldPO.vendor, updateData.deliverTo || oldPO.deliverTo);
-      updateData.items = updateData.items.map((item) => ({
-        ...item,
-        hsnId: item.hsnId ? String(item.hsnId) : undefined,
-        ...normalizeLineItemTax(item, {
-          taxType: updateData.taxType,
-          taxLabel: updateData.taxLabel,
+
+      updateData.items = updateData.items.map((item) => {
+        const normalizedTax = normalizeLineItemTax(item, {
+          taxType: updateData.taxType || oldPO.taxType,
+          taxLabel: updateData.taxLabel || oldPO.taxLabel,
           gstSplit,
-        }),
-      }));
+        });
+
+        const taxableValue = Number(item.taxableValue) || 0;
+        const totalAmountValue =
+          Number(item.totalAmount) ||
+          Number(item.total) ||
+          taxableValue + Number(normalizedTax.taxAmount || normalizedTax.gstAmount || 0) ||
+          0;
+
+        totalTaxableValue += taxableValue;
+        totalAmount += totalAmountValue;
+
+        return {
+          ...item,
+          hsnId: item.hsnId ? String(item.hsnId) : undefined,
+          taxableValue,
+          totalAmount: totalAmountValue,
+          ...normalizedTax,
+          // CRITICAL: Ensure all tax fields are aligned with recalculated normalized values
+          // These override any stale values from the request item
+          taxRate: normalizedTax.taxRate,
+          taxAmount: normalizedTax.taxAmount,
+          gstRate: normalizedTax.gstRate,
+          gstAmount: normalizedTax.gstAmount,
+          combinedTaxRate: normalizedTax.combinedTaxRate,
+        };
+      });
+
+      // Update totals in updateData so they get saved
+      updateData.totalTaxableValue = round2(totalTaxableValue);
+      updateData.totalAmount = round2(totalAmount);
     }
 
-    if (Array.isArray(updateData.items) || Array.isArray(updateData.taxSummary)) {
+    // ── FIX: Always rebuild tax meta from items when items are present ──
+    // This ensures PO-level totals (totalTaxAmount, totalCGSTAmount, etc.) are recalculated
+    // and not left stale from previous save.
+    if (Array.isArray(updateData.items)) {
       const taxMeta = buildTaxMeta({
         taxType: updateData.taxType || oldPO.taxType,
         taxLabel: updateData.taxLabel || oldPO.taxLabel,
-        taxSummary: updateData.taxSummary,
-        totalTaxAmount: updateData.totalTaxAmount,
-        items: updateData.items || oldPO.items || [],
+        taxSummary: undefined, // Don't pass old summary, let it rebuild from items
+        totalTaxAmount: undefined, // ← CRITICAL: Don't pass old amount, let it recalculate from items
+        items: updateData.items || [], // Use freshly recalculated items
       });
       updateData.taxType = taxMeta.taxType;
       updateData.taxLabel = taxMeta.taxLabel;

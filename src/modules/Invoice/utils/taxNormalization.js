@@ -170,21 +170,60 @@ export const normalizeTaxBreakdown = (taxBreakdown = [], fallback = {}) => {
 export const normalizeLineItemTax = (item = {}, fallback = {}) => {
   const taxType = item.taxType || item.taxLabel || fallback.taxType || "GST";
   const taxLabel = item.taxLabel || item.taxType || fallback.taxLabel || taxType;
-  const taxRate = round2(item.taxRate ?? item.gstRate ?? fallback.taxRate ?? fallback.gstRate ?? 0);
-  const taxAmount = round2(item.taxAmount ?? item.gstAmount ?? fallback.taxAmount ?? fallback.gstAmount ?? 0);
-  const taxBreakdown = normalizeTaxBreakdown(item.taxBreakdown, {
-    taxType,
-    label: taxLabel,
-    rate: taxRate,
-    amount: taxAmount,
-    cgstAmount: item.cgstAmount ?? fallback.cgstAmount,
-    sgstAmount: item.sgstAmount ?? fallback.sgstAmount,
-    igstAmount: item.igstAmount ?? fallback.igstAmount,
-    cgstRate: item.cgstRate ?? fallback.cgstRate,
-    sgstRate: item.sgstRate ?? fallback.sgstRate,
-    igstRate: item.igstRate ?? fallback.igstRate,
-    gstSplit: fallback.gstSplit,
-  });
+  // CRITICAL FIX: Prioritize gstRate over taxRate
+  // gstRate is the source of truth from HSN, while taxRate might be stale from previous saves
+  const taxRate = round2(item.gstRate ?? item.taxRate ?? fallback.gstRate ?? fallback.taxRate ?? 0);
+  
+  // ── CRITICAL FIX ──────────────────────────────────────────────────────────
+  // ALWAYS recalculate tax amount from taxableValue × taxRate instead of trusting
+  // frontend-provided taxAmount/gstAmount. Frontend may send stale values from 
+  // previous edits, causing tax totals to be incorrect.
+  // ──────────────────────────────────────────────────────────────────────────
+  const taxableValue = round2(Number(item.taxableValue) || 0);
+  let calculatedTaxAmount = round2(0);
+  
+  if (taxableValue > 0 && taxRate > 0) {
+    // Recalculate from first principles: taxableValue × (taxRate / 100)
+    calculatedTaxAmount = round2((taxableValue * taxRate) / 100);
+  }
+  
+  // Use calculated value if item had a taxableValue, otherwise fall back to provided value
+  const taxAmount = taxableValue > 0 ? calculatedTaxAmount : 
+    round2(item.taxAmount ?? item.gstAmount ?? fallback.taxAmount ?? fallback.gstAmount ?? 0);
+  
+  // ── ALSO CRITICAL: Rebuild taxBreakdown with correct amounts ───────────────
+  // If we have a taxableValue and taxRate, REBUILD the breakdown with correct amounts
+  // instead of trusting the stale amounts from item.taxBreakdown
+  // ──────────────────────────────────────────────────────────────────────────
+  let taxBreakdown = [];
+  
+  if (taxableValue > 0 && taxRate > 0) {
+    // Rebuild the breakdown with recalculated amounts ONLY
+    // CRITICAL: Do NOT pass item.cgstAmount, item.sgstAmount, item.igstAmount
+    // as those are stale and would be reused. Let buildFallbackGstBreakdown
+    // derive them from the recalculated amount and gstSplit.
+    taxBreakdown = buildFallbackGstBreakdown({
+      rate: taxRate,
+      amount: taxAmount,
+      gstSplit: fallback.gstSplit,
+      // ← Explicitly NOT passing cgstAmount/sgstAmount/igstAmount from item!
+    });
+  } else {
+    // Fall back to normalizing the provided breakdown
+    taxBreakdown = normalizeTaxBreakdown(item.taxBreakdown, {
+      taxType,
+      label: taxLabel,
+      rate: taxRate,
+      amount: taxAmount,
+      cgstAmount: item.cgstAmount ?? fallback.cgstAmount,
+      sgstAmount: item.sgstAmount ?? fallback.sgstAmount,
+      igstAmount: item.igstAmount ?? fallback.igstAmount,
+      cgstRate: item.cgstRate ?? fallback.cgstRate,
+      sgstRate: item.sgstRate ?? fallback.sgstRate,
+      igstRate: item.igstRate ?? fallback.igstRate,
+      gstSplit: fallback.gstSplit,
+    });
+  }
 
   const combinedTaxRate = taxBreakdown.length > 0
     ? round2(taxBreakdown.reduce((sum, entry) => sum + Number(entry.rate || 0), 0))
@@ -192,7 +231,19 @@ export const normalizeLineItemTax = (item = {}, fallback = {}) => {
   const combinedTaxAmount = taxBreakdown.length > 0
     ? round2(taxBreakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))
     : taxAmount;
-  const splitTaxAmounts = deriveBreakdownAmounts(taxBreakdown, item);
+  
+  // ── CRITICAL: When we rebuild the breakdown from recalculated values,
+  // derive split amounts from the breakdown ONLY, not from stale item values ──
+  let splitTaxAmounts = { cgstAmount: 0, sgstAmount: 0, igstAmount: 0 };
+  
+  if (taxableValue > 0 && taxRate > 0) {
+    // We rebuilt the breakdown, so derive split amounts from it
+    // Do NOT use item's stale split amounts as fallback
+    splitTaxAmounts = deriveBreakdownAmounts(taxBreakdown, {});  // Pass empty object, not item!
+  } else {
+    // We're using provided/normalized breakdown, so use item's values as fallback
+    splitTaxAmounts = deriveBreakdownAmounts(taxBreakdown, item);
+  }
 
   return {
     taxType,
@@ -201,8 +252,8 @@ export const normalizeLineItemTax = (item = {}, fallback = {}) => {
     taxAmount: combinedTaxAmount,
     combinedTaxRate,
     taxBreakdown,
-    gstRate: round2(item.gstRate ?? combinedTaxRate),
-    gstAmount: round2(item.gstAmount ?? combinedTaxAmount),
+    gstRate: combinedTaxRate,        // ← Use recalculated rate, NOT item.gstRate (could be stale)
+    gstAmount: combinedTaxAmount,    // ← Use recalculated amount, NOT item.gstAmount (could be stale)
     cgstAmount: splitTaxAmounts.cgstAmount,
     sgstAmount: splitTaxAmounts.sgstAmount,
     igstAmount: splitTaxAmounts.igstAmount,
