@@ -13,6 +13,10 @@ import {
 import { getGroupByIdRepo } from "../repos/groupRepo.js";
 import { getConfigRepo } from "../repos/configRepo.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
+import {
+  enforceScheduleMappingForNature,
+  getAutoScheduleMappingForLedger,
+} from "../utils/scheduleIIIConfig.js";
 
 const deriveLedgerPropertiesFromGroup = (group) => {
   const nature = group?.nature;
@@ -122,7 +126,21 @@ const getNextAccountCode = async (companyId, groupId) => {
 
 export const createAccount = async (req, res, next) => {
   try {
-    const { code, name, groupId, companyId, openingBalance, openingType, linkedClientId, linkedVendorId, description } =
+    const {
+      code,
+      name,
+      groupId,
+      companyId,
+      openingBalance,
+      openingType,
+      linkedClientId,
+      linkedVendorId,
+      description,
+      scheduleMainHead,
+      scheduleGroup,
+      scheduleLineItem,
+      scheduleMapping,
+    } =
       req.body;
 
     if (!name || !groupId || !companyId) {
@@ -139,6 +157,13 @@ export const createAccount = async (req, res, next) => {
     }
 
     const derivedProperties = deriveLedgerPropertiesFromGroup(group);
+    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
+      ...(scheduleMapping || {}),
+      scheduleMainHead,
+      scheduleGroup,
+      scheduleLineItem,
+      noteNo: scheduleMapping?.noteNo || group.noteNo || null,
+    });
 
     let accountCode = code;
     if (!accountCode) {
@@ -164,10 +189,7 @@ export const createAccount = async (req, res, next) => {
       linkedVendorId: linkedVendorId || null,
       description: description || "",
       scheduleMapping: {
-        scheduleMainHead: group.scheduleMainHead || null,
-        scheduleGroup: group.scheduleGroup || null,
-        scheduleLineItem: group.scheduleLineItem || null,
-        noteNo: group.noteNo || null,
+        ...enforcedScheduleMapping,
         reportType: derivedProperties.scheduleMapping.reportType,
       },
       createdBy: req.user?.id,
@@ -188,6 +210,43 @@ export const createAccount = async (req, res, next) => {
       statusCode: 201,
       data: account,
       message: "Account created successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const suggestScheduleMapping = async (req, res, next) => {
+  try {
+    const { ledgerName = "", groupId, groupName, companyId } = req.query;
+
+    if (!companyId || (!groupId && !groupName)) {
+      throw new AppError("companyId and groupId or groupName are required", 400, "suggestScheduleMapping");
+    }
+
+    let group = null;
+    if (groupId) {
+      group = await getGroupByIdRepo(groupId);
+    } else {
+      const { getGroupsRepo } = await import("../repos/groupRepo.js");
+      const groups = await getGroupsRepo({ companyId, name: groupName });
+      group = groups?.[0] || null;
+    }
+
+    if (!group || String(group.companyId) !== String(companyId)) {
+      throw new AppError("Selected group not found", 404, "suggestScheduleMapping");
+    }
+
+    const mapping = getAutoScheduleMappingForLedger(ledgerName, group);
+
+    new ApiResponse({
+      statusCode: 200,
+      data: {
+        ...mapping,
+        nature: group.nature,
+        balanceType: group.balanceType,
+      },
+      message: "Schedule mapping suggested successfully",
     }).send(res);
   } catch (error) {
     next(error);
@@ -263,6 +322,13 @@ export const updateAccount = async (req, res, next) => {
     }
 
     const derivedProperties = deriveLedgerPropertiesFromGroup(group);
+    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
+      ...(req.body.scheduleMapping || {}),
+      scheduleMainHead: req.body.scheduleMainHead,
+      scheduleGroup: req.body.scheduleGroup,
+      scheduleLineItem: req.body.scheduleLineItem,
+      noteNo: req.body.scheduleMapping?.noteNo || oldAccount.scheduleMapping?.noteNo || group.noteNo || null,
+    });
 
     const updateData = {
       ...req.body,
@@ -274,10 +340,7 @@ export const updateAccount = async (req, res, next) => {
       openingType: normalizeOpeningType(req.body.openingType || derivedProperties.openingType),
       subType: derivedProperties.subType,
       scheduleMapping: {
-        scheduleMainHead: group.scheduleMainHead || null,
-        scheduleGroup: group.scheduleGroup || null,
-        scheduleLineItem: group.scheduleLineItem || null,
-        noteNo: group.noteNo || null,
+        ...enforcedScheduleMapping,
         reportType: derivedProperties.scheduleMapping.reportType,
       },
       updatedBy: req.user?.id,

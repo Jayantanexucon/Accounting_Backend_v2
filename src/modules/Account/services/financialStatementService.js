@@ -195,12 +195,13 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
     includeZeroBalance: true,
   });
 
-  // Filter P&L accounts
+  // Filter P&L accounts. Nature is the primary section classifier;
+  // schedule fields only determine grouping inside that section.
   const revenue = [];
   const expenses = [];
 
   for (const account of tb.accounts) {
-    if (account.scheduleMainHead !== "P&L") continue;
+    if (!["Income", "Expense"].includes(account.groupNature)) continue;
 
     const accountLine = {
       accountId: account.accountId,
@@ -213,18 +214,18 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
       linkedVendorId: account.linkedVendorId,
       linkedPartyType: account.linkedPartyType,
       partyName: account.partyName,
+      groupNature: account.groupNature,
+      scheduleGroup: account.scheduleGroup,
       scheduleLineItem: account.scheduleLineItem,
       amount: account.periodDebit || account.periodCredit || 0,
       debit: account.periodDebit || 0,
       credit: account.periodCredit || 0,
     };
 
-    // Income accounts are credit balance accounts (positive credit = income)
-    // Expense accounts are debit balance accounts (positive debit = expense)
     if (account.groupNature === "Income") {
       accountLine.amount = account.periodCredit || 0;
       revenue.push(accountLine);
-    } else {
+    } else if (account.groupNature === "Expense") {
       accountLine.amount = account.periodDebit || 0;
       expenses.push(accountLine);
     }
@@ -233,6 +234,8 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   // Aggregate by schedule line item
   const groupRevenue = {};
   const groupExpenses = {};
+  const revenueByScheduleGroup = {};
+  const expensesByScheduleGroup = {};
 
   // Initialize standard line items
   for (const item of SCHEDULE_III_CONFIG.Income.groups.Revenue) {
@@ -243,19 +246,39 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
   }
 
   for (const rev of revenue) {
+    const scheduleGroup = rev.scheduleGroup || "Revenue";
     const lineItem = rev.scheduleLineItem || "Other Income";
     if (!groupRevenue[lineItem]) {
       groupRevenue[lineItem] = [];
     }
     groupRevenue[lineItem].push(rev);
+    if (!revenueByScheduleGroup[scheduleGroup]) {
+      revenueByScheduleGroup[scheduleGroup] = { total: 0, lineItems: {} };
+    }
+    if (!revenueByScheduleGroup[scheduleGroup].lineItems[lineItem]) {
+      revenueByScheduleGroup[scheduleGroup].lineItems[lineItem] = { total: 0, items: [] };
+    }
+    revenueByScheduleGroup[scheduleGroup].total += rev.amount;
+    revenueByScheduleGroup[scheduleGroup].lineItems[lineItem].total += rev.amount;
+    revenueByScheduleGroup[scheduleGroup].lineItems[lineItem].items.push(rev);
   }
 
   for (const exp of expenses) {
+    const scheduleGroup = exp.scheduleGroup || "Expenses";
     const lineItem = exp.scheduleLineItem || "Other Expenses";
     if (!groupExpenses[lineItem]) {
       groupExpenses[lineItem] = [];
     }
     groupExpenses[lineItem].push(exp);
+    if (!expensesByScheduleGroup[scheduleGroup]) {
+      expensesByScheduleGroup[scheduleGroup] = { total: 0, lineItems: {} };
+    }
+    if (!expensesByScheduleGroup[scheduleGroup].lineItems[lineItem]) {
+      expensesByScheduleGroup[scheduleGroup].lineItems[lineItem] = { total: 0, items: [] };
+    }
+    expensesByScheduleGroup[scheduleGroup].total += exp.amount;
+    expensesByScheduleGroup[scheduleGroup].lineItems[lineItem].total += exp.amount;
+    expensesByScheduleGroup[scheduleGroup].lineItems[lineItem].items.push(exp);
   }
 
   // Calculate totals
@@ -270,10 +293,12 @@ export const getProfitAndLoss = async (companyId, startDate, endDate, options = 
       endDate,
     },
     revenue: {
+      groups: revenueByScheduleGroup,
       lineItems: groupRevenue,
       total: totalRevenue,
     },
     expenses: {
+      groups: expensesByScheduleGroup,
       lineItems: groupExpenses,
       total: totalExpenses,
     },
