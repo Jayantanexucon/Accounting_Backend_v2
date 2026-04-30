@@ -20,6 +20,35 @@ const paymentSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Amount paid is required"],
     },
+    originalAmount: {
+      type: Number,
+      default: 0,
+    },
+    receivedAmount: {
+      type: Number,
+      default: 0,
+    },
+    adjustmentAmount: {
+      type: Number,
+      default: 0,
+    },
+    adjustmentType: {
+      type: String,
+      enum: [
+        "NONE",
+        "BANK_CHARGES",
+        "PAYMENT_GATEWAY_CHARGES",
+        "FOREX_LOSS",
+        "FOREX_GAIN",
+        "EXTRA_RECEIPT",
+      ],
+      default: "NONE",
+    },
+    adjustmentLedgerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
+    },
     tdsAmount: {
       type: Number,
       default: 0,
