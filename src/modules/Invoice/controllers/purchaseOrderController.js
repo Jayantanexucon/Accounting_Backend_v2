@@ -42,7 +42,7 @@ const extractClientCode = (vendorName = "") => {
 };
 
 /**
- * Generate unique PO number with format: PO-YYYYMMDD-CLIENT-XXXX
+ * Generate unique PO number with format: PO-YYYYMMDD-CLIENT-XXXXX
  * @param {string} companyId - Company ID
  * @param {string} vendorName - Vendor/Client name
  * @param {Date} poDate - Purchase order date
@@ -60,21 +60,17 @@ const generatePONumber = async (companyId, vendorName = "", poDate = new Date())
     // Extract client code (first 3-4 letters)
     const clientCode = extractClientCode(vendorName);
     
-    // Get count of POs for this company on this date to generate unique number
+    // Get TOTAL count of all POs for this vendor across ALL time to generate unique number
     const PurchaseOrder = await getPurchaseOrderModel();
-    const startOfDay = new Date(year, date.getMonth(), date.getDate(), 0, 0, 0, 0);
-    const endOfDay = new Date(year, date.getMonth(), date.getDate(), 23, 59, 59, 999);
     
-    const countToday = await PurchaseOrder.countDocuments({
+    const countForVendor = await PurchaseOrder.countDocuments({
       companyId: companyId,
-      poDate: {
-        $gte: startOfDay,
-        $lte: endOfDay,
-      },
+      "vendor.name": vendorName,
     });
     
-    // Sequential number: pad with zeros (e.g., 0001, 0002)
-    const sequenceNumber = String(countToday + 1).padStart(4, "0");
+    // Sequential number: pad with zeros (e.g., 00001, 00002)
+    // This ensures the sequence never resets and is unique per vendor
+    const sequenceNumber = String(countForVendor + 1).padStart(5, "0");
     
     return `PO-${dateStr}-${clientCode}-${sequenceNumber}`;
   } catch (error) {
