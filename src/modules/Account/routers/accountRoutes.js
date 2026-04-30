@@ -9,6 +9,7 @@ import {
   deleteAccount,
   getAccountByCode,
   getLedger,
+  suggestScheduleMapping,
 } from "../controllers/accountController.js";
 
 const router = express.Router();
@@ -20,6 +21,8 @@ router.post("/", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", actio
 router.get("/", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getAllAccounts);
 
 router.get("/code/search", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getAccountByCode);
+
+router.get("/schedule/suggest", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), suggestScheduleMapping);
 
 router.get("/ledger/report", accessControlMiddleware({ entityKey: "CHART OF ACCOUNTS", action: "VIEW" }), getLedger);
 

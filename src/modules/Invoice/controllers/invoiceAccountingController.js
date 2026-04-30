@@ -23,7 +23,7 @@ const PAYMENT_MODE_TO_LEDGER = {
       scheduleGroup: "Current Assets",
       scheduleLineItem: "Cash and Cash Equivalents",
     },
-    accountName: "Bank Clearing Account",
+    accountName: "Bank Account",
     prefix: "BANK",
   },
   CHEQUE: {
@@ -35,7 +35,7 @@ const PAYMENT_MODE_TO_LEDGER = {
       scheduleGroup: "Current Assets",
       scheduleLineItem: "Cash and Cash Equivalents",
     },
-    accountName: "Bank Clearing Account",
+    accountName: "Bank Account",
     prefix: "BANK",
   },
   CASH: {
@@ -88,6 +88,15 @@ const PAYMENT_MODE_TO_LEDGER = {
   },
 };
 
+const BANK_LEDGER_GROUP = {
+  name: "Bank Accounts",
+  nature: "Asset",
+  balanceType: "Debit",
+  scheduleMainHead: "Assets",
+  scheduleGroup: "Current Assets",
+  scheduleLineItem: "Cash and Cash Equivalents",
+};
+
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const normalizeCompanyId = (companyId) => String(companyId);
@@ -99,6 +108,8 @@ const getInvoiceClientName = (invoice) =>
 
 const generateDocumentNumber = (prefix, companyId) =>
   `${prefix}-${normalizeCompanyId(companyId).slice(-4)}-${Date.now()}`;
+
+const roundMoney = (value = 0) => Math.round(Number(value || 0) * 100) / 100;
 
 const getInvoiceSettlementAmount = (invoice) => {
   const total = Number(invoice.invoiceAmount || invoice.amountDue || 0);
@@ -237,6 +248,152 @@ const ensureLedgerAccount = async ({
   }
 
   return { account, group, autoCreated };
+};
+
+const isValidBankLedger = (account, group) => {
+  if (!account || !group) return false;
+  const schedule = account.scheduleMapping || {};
+  return (
+    group.nature === "Asset" &&
+    group.balanceType === "Debit" &&
+    group.scheduleMainHead === "Assets" &&
+    group.scheduleGroup === "Current Assets" &&
+    group.scheduleLineItem === "Cash and Cash Equivalents" &&
+    /bank/i.test(group.name || account.groupName || "") &&
+    (schedule.scheduleLineItem || group.scheduleLineItem) === "Cash and Cash Equivalents"
+  );
+};
+
+const getPaymentBankLedger = async ({ companyId, bankLedgerId, userId }) => {
+  const Account = await getAccountModel();
+  const Group = await getGroupModel();
+  const normalizedCompanyId = normalizeCompanyId(companyId);
+
+  if (bankLedgerId) {
+    const account = await Account.findOne({
+      _id: bankLedgerId,
+      companyId: normalizedCompanyId,
+      isActive: true,
+    }).lean();
+    const group = account?.groupId ? await Group.findById(account.groupId).lean() : null;
+
+    if (!isValidBankLedger(account, group)) {
+      throw new AppError("Selected ledger must belong to Bank Accounts under Cash and Cash Equivalents", 400, "getPaymentBankLedger");
+    }
+
+    return { account, group, autoCreated: false };
+  }
+
+  const bankGroups = await Group.find({
+    companyId: normalizedCompanyId,
+    name: { $regex: "bank", $options: "i" },
+    nature: "Asset",
+    scheduleMainHead: "Assets",
+    scheduleGroup: "Current Assets",
+    scheduleLineItem: "Cash and Cash Equivalents",
+  }).lean();
+
+  if (bankGroups.length) {
+    const account = await Account.findOne({
+      companyId: normalizedCompanyId,
+      isActive: true,
+      groupId: { $in: bankGroups.map((group) => group._id) },
+    }).sort({ createdAt: 1 }).lean();
+
+    if (account) {
+      const group = bankGroups.find((item) => String(item._id) === String(account.groupId));
+      return { account, group, autoCreated: false };
+    }
+  }
+
+  return ensureLedgerAccount({
+    companyId,
+    groupData: BANK_LEDGER_GROUP,
+    accountName: "Bank Account",
+    searchPatterns: ["^Bank Account$"],
+    prefix: "BANK",
+    userId,
+    extra: {
+      description: "Auto-created default bank ledger for payment receipts",
+    },
+  });
+};
+
+const getAdjustmentSource = ({ paymentMode = "", adjustmentSource = "", reference = "", notes = "" } = {}) => {
+  const text = `${adjustmentSource} ${reference} ${notes} ${paymentMode}`.toLowerCase();
+  if (/\b(forex|fx|foreign exchange|currency|exchange)\b/.test(text)) return "FOREX";
+  if (/\b(gateway|payment gateway|card|upi|wallet|online)\b/.test(text)) return "PAYMENT_GATEWAY";
+  if (["DIGITAL_WALLET", "CREDIT_CARD"].includes(`${paymentMode}`.toUpperCase())) return "PAYMENT_GATEWAY";
+  return "BANK";
+};
+
+const getPaymentAdjustmentConfig = ({ difference, paymentMode, adjustmentSource, reference, notes }) => {
+  const adjustmentAmount = Math.abs(roundMoney(difference));
+  if (adjustmentAmount <= 0) {
+    return {
+      adjustmentAmount: 0,
+      adjustmentType: "NONE",
+      ledgerName: null,
+      groupData: null,
+      prefix: null,
+      isExpense: false,
+    };
+  }
+
+  const source = getAdjustmentSource({ paymentMode, adjustmentSource, reference, notes });
+  const isShortReceipt = difference > 0;
+
+  if (isShortReceipt) {
+    if (source === "FOREX") {
+      return {
+        adjustmentAmount,
+        adjustmentType: "FOREX_LOSS",
+        ledgerName: "Forex Loss",
+        groupData: {
+          name: "Indirect Expenses",
+          nature: "Expense",
+          balanceType: "Debit",
+          scheduleMainHead: "P&L",
+          scheduleGroup: "Expenses",
+          scheduleLineItem: "Other Expenses",
+        },
+        prefix: "FXLOSS",
+        isExpense: true,
+      };
+    }
+
+    return {
+      adjustmentAmount,
+      adjustmentType: source === "PAYMENT_GATEWAY" ? "PAYMENT_GATEWAY_CHARGES" : "BANK_CHARGES",
+      ledgerName: source === "PAYMENT_GATEWAY" ? "Payment Gateway Charges" : "Bank Charges",
+      groupData: {
+        name: "Indirect Expenses",
+        nature: "Expense",
+        balanceType: "Debit",
+        scheduleMainHead: "P&L",
+        scheduleGroup: "Expenses",
+        scheduleLineItem: "Other Expenses",
+      },
+      prefix: source === "PAYMENT_GATEWAY" ? "PGCHG" : "BNKCHG",
+      isExpense: true,
+    };
+  }
+
+  return {
+    adjustmentAmount,
+    adjustmentType: source === "FOREX" ? "FOREX_GAIN" : "EXTRA_RECEIPT",
+    ledgerName: source === "FOREX" ? "Forex Gain" : "Extra Receipt",
+    groupData: {
+      name: "Other Income",
+      nature: "Income",
+      balanceType: "Credit",
+      scheduleMainHead: "P&L",
+      scheduleGroup: "Revenue",
+      scheduleLineItem: "Other Income",
+    },
+    prefix: source === "FOREX" ? "FXGAIN" : "EXTRCPT",
+    isExpense: false,
+  };
 };
 
 const ensureInvoiceAccounts = async (invoice, userId) => {
@@ -512,6 +669,8 @@ export const recordPaymentForInvoice = async ({
   tdsSection,
   clientId,
   bankLedgerId,
+  expectedAmount,
+  adjustmentSource,
   userId,
   reqUser = {},
 }) => {
@@ -527,7 +686,10 @@ export const recordPaymentForInvoice = async ({
 
   const normalizedAmountPaid = Number(amountPaid || 0);
   const normalizedTdsAmount = Number(tdsAmount || 0);
-  const grossAmount = normalizedAmountPaid + normalizedTdsAmount;
+
+  if (normalizedAmountPaid < 0 || normalizedTdsAmount < 0) {
+    throw new AppError("Payment and TDS amounts cannot be negative", 400, "recordPaymentForInvoice");
+  }
 
   if (normalizedAmountPaid <= 0 && normalizedTdsAmount <= 0) {
     throw new AppError("Payment amount or TDS amount is required", 400, "recordPaymentForInvoice");
@@ -536,35 +698,60 @@ export const recordPaymentForInvoice = async ({
   const outstandingAmount = getOutstandingAmount(invoice);
   // Net outstanding for the client is netPayable - alreadyPaid
   const netOutstanding = Math.max(0, Number(invoice.netPayable || invoice.amountDue - (invoice.tdsAmount || 0)) - Number(invoice.paidAmount || 0));
+  const expectedSettlementAmount = roundMoney(
+    expectedAmount !== undefined && expectedAmount !== null && expectedAmount !== ""
+      ? Number(expectedAmount)
+      : netOutstanding
+  );
+  const settlementDifference = roundMoney(expectedSettlementAmount - normalizedAmountPaid);
+  const adjustmentConfig = getPaymentAdjustmentConfig({
+    difference: settlementDifference,
+    paymentMode,
+    adjustmentSource,
+    reference,
+    notes,
+  });
+  const grossAmount = expectedSettlementAmount + normalizedTdsAmount;
 
-  if (normalizedAmountPaid > netOutstanding + 0.0001) {
-    throw new AppError("Payment exceeds invoice outstanding amount", 400, "recordPaymentForInvoice");
+  if (expectedSettlementAmount <= 0) {
+    throw new AppError("Expected settlement amount is required", 400, "recordPaymentForInvoice");
+  }
+
+  if (expectedSettlementAmount > netOutstanding + 0.0001) {
+    throw new AppError("Expected settlement exceeds invoice outstanding amount", 400, "recordPaymentForInvoice");
   }
 
   const accounts = await ensureInvoiceAccounts(invoice, userId);
-  const Account = await getAccountModel();
-  const paymentLedgerConfig = PAYMENT_MODE_TO_LEDGER[paymentMode] || PAYMENT_MODE_TO_LEDGER.BANK_TRANSFER;
-  const paymentLedger = bankLedgerId
-    ? {
-        account: await Account.findOne({
-          _id: bankLedgerId,
-          companyId: normalizeCompanyId(companyId),
-          isActive: true,
-        }),
-        autoCreated: false,
-      }
-    : await ensureLedgerAccount({
-        companyId,
-        groupData: paymentLedgerConfig.group,
-        accountName: paymentLedgerConfig.accountName,
-        searchPatterns: [paymentLedgerConfig.accountName, paymentMode?.replaceAll("_", " ") || "bank"],
-        prefix: paymentLedgerConfig.prefix,
-        userId,
-      });
+  const paymentLedger =
+    `${paymentMode}`.toUpperCase() === "CASH"
+      ? await ensureLedgerAccount({
+          companyId,
+          groupData: PAYMENT_MODE_TO_LEDGER.CASH.group,
+          accountName: PAYMENT_MODE_TO_LEDGER.CASH.accountName,
+          searchPatterns: ["^Cash In Hand$"],
+          prefix: PAYMENT_MODE_TO_LEDGER.CASH.prefix,
+          userId,
+        })
+      : await getPaymentBankLedger({ companyId, bankLedgerId, userId });
 
   if (!paymentLedger?.account) {
     throw new AppError("Selected bank ledger not found for payment posting", 404, "recordPaymentForInvoice");
   }
+
+  const adjustmentLedger =
+    adjustmentConfig.adjustmentAmount > 0
+      ? await ensureLedgerAccount({
+          companyId,
+          groupData: adjustmentConfig.groupData,
+          accountName: adjustmentConfig.ledgerName,
+          searchPatterns: [adjustmentConfig.ledgerName, adjustmentConfig.adjustmentType.replaceAll("_", " ")],
+          prefix: adjustmentConfig.prefix,
+          userId,
+          extra: {
+            description: `Auto-created ledger for ${adjustmentConfig.ledgerName}`,
+          },
+        })
+      : null;
 
   const tdsLedger =
     normalizedTdsAmount > 0
@@ -611,6 +798,18 @@ export const recordPaymentForInvoice = async ({
     });
   }
 
+  if (adjustmentLedger?.account && adjustmentConfig.adjustmentAmount > 0) {
+    paymentJournalLines.push({
+      accountId: adjustmentLedger.account._id,
+      accountCode: adjustmentLedger.account.code,
+      accountName: adjustmentLedger.account.name,
+      debitAmount: adjustmentConfig.isExpense ? adjustmentConfig.adjustmentAmount : 0,
+      creditAmount: adjustmentConfig.isExpense ? 0 : adjustmentConfig.adjustmentAmount,
+      description: `${adjustmentConfig.ledgerName} adjustment for ${invoice.invoiceNo}`,
+      linkedToClientId: clientId || invoice.billTo?.clientId || null,
+    });
+  }
+
   paymentJournalLines.push({
     accountId: accounts.clientLedger.account._id,
     accountCode: accounts.clientLedger.account.code,
@@ -633,8 +832,8 @@ export const recordPaymentForInvoice = async ({
       sourceType: "PAYMENT",
       sourceId: String(invoice._id),
       partyName: accounts.clientName,
-      totalDebit: grossAmount,
-      totalCredit: grossAmount,
+      totalDebit: paymentJournalLines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0),
+      totalCredit: paymentJournalLines.reduce((sum, line) => sum + Number(line.creditAmount || 0), 0),
       status: "Approved",
       approvalStatus: "Approved",
       approvedBy: userId,
@@ -650,6 +849,11 @@ export const recordPaymentForInvoice = async ({
     companyId: normalizeCompanyId(companyId),
     clientId: clientId || invoice.billTo?.clientId || null,
     amountPaid: normalizedAmountPaid,
+    originalAmount: expectedSettlementAmount,
+    receivedAmount: normalizedAmountPaid,
+    adjustmentAmount: adjustmentConfig.adjustmentAmount,
+    adjustmentType: adjustmentConfig.adjustmentType,
+    adjustmentLedgerId: adjustmentLedger?.account?._id || null,
     tdsAmount: normalizedTdsAmount,
     tdsRate: Number(tdsRate || 0),
     tdsSection: tdsSection || "",
@@ -664,11 +868,11 @@ export const recordPaymentForInvoice = async ({
     updatedBy: userId,
   });
 
-  const newRemaining = Math.max(0, getOutstandingAmount(invoice) - normalizedAmountPaid);
-  const totalSettled = Number(invoice.paidAmount || 0) + normalizedAmountPaid + Number(invoice.tdsAmount || 0) + normalizedTdsAmount;
+  const newRemaining = Math.max(0, getOutstandingAmount(invoice) - expectedSettlementAmount);
+  const totalSettled = Number(invoice.paidAmount || 0) + expectedSettlementAmount + Number(invoice.tdsAmount || 0) + normalizedTdsAmount;
   
   const updatedInvoice = await updateInvoiceRepo(invoice._id, {
-    paidAmount: Number(invoice.paidAmount || 0) + normalizedAmountPaid,
+    paidAmount: Number(invoice.paidAmount || 0) + expectedSettlementAmount,
     tdsAmount: Number(invoice.tdsAmount || 0) + normalizedTdsAmount,
     netPayable: getInvoiceSettlementAmount(invoice),
     remainingAmount: newRemaining,
@@ -695,6 +899,11 @@ export const recordPaymentForInvoice = async ({
       invoiceId: invoice._id,
       journalId: paymentJournal._id,
       amountPaid: normalizedAmountPaid,
+      originalAmount: expectedSettlementAmount,
+      receivedAmount: normalizedAmountPaid,
+      adjustmentAmount: adjustmentConfig.adjustmentAmount,
+      adjustmentType: adjustmentConfig.adjustmentType,
+      adjustmentLedgerId: adjustmentLedger?.account?._id || null,
       tdsAmount: normalizedTdsAmount,
       paymentMode,
     },
@@ -706,6 +915,7 @@ export const recordPaymentForInvoice = async ({
     journal: paymentJournal,
     invoice: updatedInvoice,
     ledger: accounts.clientLedger.account,
+    adjustmentLedger: adjustmentLedger?.account || null,
   };
 };
 
@@ -975,6 +1185,9 @@ export const recordInvoicePayment = async (req, res, next) => {
       paymentDate,
       reference,
       notes,
+      bankLedgerId,
+      expectedAmount,
+      adjustmentSource,
     } = req.body;
 
     if (!invoiceId) {
@@ -993,6 +1206,9 @@ export const recordInvoicePayment = async (req, res, next) => {
       paymentDate,
       reference,
       notes,
+      bankLedgerId,
+      expectedAmount,
+      adjustmentSource,
       userId: getUserId(req),
       reqUser: req.user || {},
     });

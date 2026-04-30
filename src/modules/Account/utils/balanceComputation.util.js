@@ -245,28 +245,35 @@ export const buildAccountBalanceForReport = (
     throw new AppError("Account is required", 400, "buildAccountBalanceForReport");
   }
 
-  const openingBalance = computeClosingBalance(openingDebit, openingCredit, 0, 0, account.openingType);
+  const group = typeof account.groupId === "object" ? account.groupId : null;
+  const normalBalance = group?.balanceType || account.groupBalanceType || account.openingType;
+  const scheduleMainHead = account.scheduleMapping?.scheduleMainHead || group?.scheduleMainHead;
+  const scheduleGroup = account.scheduleMapping?.scheduleGroup || group?.scheduleGroup;
+  const scheduleLineItem = account.scheduleMapping?.scheduleLineItem || group?.scheduleLineItem;
+  const groupNature = group?.nature || account.groupNature || null;
+
+  const openingBalance = computeClosingBalance(openingDebit, openingCredit, 0, 0, normalBalance);
 
   const closingBalance = computeClosingBalance(
     openingDebit,
     openingCredit,
     periodDebit,
     periodCredit,
-    account.openingType
+    normalBalance
   );
 
-  const { debitSide, creditSide } = splitBalance(closingBalance, account.openingType);
+  const { debitSide, creditSide } = splitBalance(closingBalance, normalBalance);
 
   return {
     accountId: account._id,
     accountCode: account.code,
     accountName: account.name,
     groupName: account.groupName,
-    scheduleMainHead: account.scheduleMapping?.scheduleMainHead,
-    scheduleGroup: account.scheduleMapping?.scheduleGroup,
-    scheduleLineItem: account.scheduleMapping?.scheduleLineItem,
-    normalBalance: account.openingType,
-    groupNature: account.groupId?.nature || account.groupNature || null,
+    scheduleMainHead,
+    scheduleGroup,
+    scheduleLineItem,
+    normalBalance,
+    groupNature,
     linkedClientId: account.linkedClientId,
     linkedVendorId: account.linkedVendorId,
     linkedPartyType: account.linkedPartyType,

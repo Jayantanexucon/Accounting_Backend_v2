@@ -43,16 +43,16 @@ router.get(
   getHSNController
 );
 
-// PUT /api/hsn/:companyId/:id - Update HSN
+// PUT /api/hsn/:companyId/:hsnId - Update HSN
 router.put(
-  "/:companyId/:id",
+  "/:companyId/:hsnId",
   accessControlMiddleware({ entityKey: "HSN", action: "EDIT" }),
   updateHSNController
 );
 
-// DELETE /api/hsn/:companyId/:id - Delete HSN
+// DELETE /api/hsn/:companyId/:hsnId - Delete HSN
 router.delete(
-  "/:companyId/:id",
+  "/:companyId/:hsnId",
   accessControlMiddleware({ entityKey: "HSN", action: "DELETE" }),
   deleteHSNController
 );

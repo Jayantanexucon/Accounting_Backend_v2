@@ -1,5 +1,6 @@
 import AppError from "../../../utils/AppError.js";
 import { getAccountModel } from "../models/Account.js";
+import { getGroupModel } from "../models/Group.js";
 import { getJournalLineModel } from "../models/JournalLine.js";
 import {
   aggregateAccountBalances,
@@ -7,6 +8,7 @@ import {
   isTrialBalanced,
   sumJournalLineAmounts,
 } from "../utils/balanceComputation.util.js";
+import { enforceScheduleMappingForNature } from "../utils/scheduleIIIConfig.js";
 
 /**
  * Trial Balance Report Service
@@ -53,6 +55,30 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
     throw new AppError("No accounts found for this company", 404, "getTrialBalance");
   }
 
+  const Group = await getGroupModel();
+  const groupIds = [
+    ...new Set(accounts.map((account) => account.groupId?.toString()).filter(Boolean)),
+  ];
+  const groups = await Group.find({ _id: { $in: groupIds }, companyId }).lean();
+  const groupsById = new Map(groups.map((group) => [group._id.toString(), group]));
+  const accountsWithGroupClassification = accounts.map((account) => {
+    const group = groupsById.get(account.groupId?.toString());
+    if (!group) return account;
+    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
+      ...(account.scheduleMapping || {}),
+      noteNo: account.scheduleMapping?.noteNo || group.noteNo || null,
+    });
+
+    return {
+      ...account,
+      groupId: group,
+      groupName: group.name || account.groupName,
+      groupNature: group.nature,
+      groupBalanceType: group.balanceType,
+      scheduleMapping: enforcedScheduleMapping,
+    };
+  });
+
   // Get all journals up to the as-of date
   const Journal = await (await import("../models/Journal.js")).getJournalModel();
   const validJournals = await Journal.find({
@@ -92,7 +118,7 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
   // Build balance record for each account
   const accountBalances = [];
 
-  for (const account of accounts) {
+  for (const account of accountsWithGroupClassification) {
     const accountId = account._id.toString();
     const lines = linesByAccount.get(accountId) || [];
 
@@ -108,15 +134,16 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
 
     // Include opening balance in computation
     balanceRecord.openingBalance = account.openingBalance || 0;
-    balanceRecord.closingBalance = account.openingBalance + (totalDebit - totalCredit);
+    const normalBalance = `${balanceRecord.normalBalance || "Debit"}`.toLowerCase();
+    balanceRecord.closingBalance = (account.openingBalance || 0) + (totalDebit - totalCredit);
 
-    if (account.openingType === "Credit") {
-      balanceRecord.closingBalance = account.openingBalance + (totalCredit - totalDebit);
+    if (normalBalance === "credit") {
+      balanceRecord.closingBalance = (account.openingBalance || 0) + (totalCredit - totalDebit);
     }
 
     // Re-split with updated closing balance
     if (balanceRecord.closingBalance > 0) {
-      if (account.openingType === "Debit") {
+      if (normalBalance === "debit") {
         balanceRecord.closingDebit = balanceRecord.closingBalance;
         balanceRecord.closingCredit = 0;
       } else {
@@ -124,7 +151,7 @@ export const getTrialBalance = async (companyId, asOfDate, options = {}) => {
         balanceRecord.closingCredit = balanceRecord.closingBalance;
       }
     } else if (balanceRecord.closingBalance < 0) {
-      if (account.openingType === "Debit") {
+      if (normalBalance === "debit") {
         balanceRecord.closingDebit = 0;
         balanceRecord.closingCredit = Math.abs(balanceRecord.closingBalance);
       } else {
