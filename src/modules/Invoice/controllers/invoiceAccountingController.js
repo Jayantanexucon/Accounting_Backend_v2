@@ -23,7 +23,7 @@ const PAYMENT_MODE_TO_LEDGER = {
       scheduleGroup: "Current Assets",
       scheduleLineItem: "Cash and Cash Equivalents",
     },
-    accountName: "Bank Clearing Account",
+    accountName: "Bank Account",
     prefix: "BANK",
   },
   CHEQUE: {
@@ -35,7 +35,7 @@ const PAYMENT_MODE_TO_LEDGER = {
       scheduleGroup: "Current Assets",
       scheduleLineItem: "Cash and Cash Equivalents",
     },
-    accountName: "Bank Clearing Account",
+    accountName: "Bank Account",
     prefix: "BANK",
   },
   CASH: {
@@ -86,6 +86,15 @@ const PAYMENT_MODE_TO_LEDGER = {
     accountName: "Payment Clearing Account",
     prefix: "CLR",
   },
+};
+
+const BANK_LEDGER_GROUP = {
+  name: "Bank Accounts",
+  nature: "Asset",
+  balanceType: "Debit",
+  scheduleMainHead: "Assets",
+  scheduleGroup: "Current Assets",
+  scheduleLineItem: "Cash and Cash Equivalents",
 };
 
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -239,6 +248,75 @@ const ensureLedgerAccount = async ({
   }
 
   return { account, group, autoCreated };
+};
+
+const isValidBankLedger = (account, group) => {
+  if (!account || !group) return false;
+  const schedule = account.scheduleMapping || {};
+  return (
+    group.nature === "Asset" &&
+    group.balanceType === "Debit" &&
+    group.scheduleMainHead === "Assets" &&
+    group.scheduleGroup === "Current Assets" &&
+    group.scheduleLineItem === "Cash and Cash Equivalents" &&
+    /bank/i.test(group.name || account.groupName || "") &&
+    (schedule.scheduleLineItem || group.scheduleLineItem) === "Cash and Cash Equivalents"
+  );
+};
+
+const getPaymentBankLedger = async ({ companyId, bankLedgerId, userId }) => {
+  const Account = await getAccountModel();
+  const Group = await getGroupModel();
+  const normalizedCompanyId = normalizeCompanyId(companyId);
+
+  if (bankLedgerId) {
+    const account = await Account.findOne({
+      _id: bankLedgerId,
+      companyId: normalizedCompanyId,
+      isActive: true,
+    }).lean();
+    const group = account?.groupId ? await Group.findById(account.groupId).lean() : null;
+
+    if (!isValidBankLedger(account, group)) {
+      throw new AppError("Selected ledger must belong to Bank Accounts under Cash and Cash Equivalents", 400, "getPaymentBankLedger");
+    }
+
+    return { account, group, autoCreated: false };
+  }
+
+  const bankGroups = await Group.find({
+    companyId: normalizedCompanyId,
+    name: { $regex: "bank", $options: "i" },
+    nature: "Asset",
+    scheduleMainHead: "Assets",
+    scheduleGroup: "Current Assets",
+    scheduleLineItem: "Cash and Cash Equivalents",
+  }).lean();
+
+  if (bankGroups.length) {
+    const account = await Account.findOne({
+      companyId: normalizedCompanyId,
+      isActive: true,
+      groupId: { $in: bankGroups.map((group) => group._id) },
+    }).sort({ createdAt: 1 }).lean();
+
+    if (account) {
+      const group = bankGroups.find((item) => String(item._id) === String(account.groupId));
+      return { account, group, autoCreated: false };
+    }
+  }
+
+  return ensureLedgerAccount({
+    companyId,
+    groupData: BANK_LEDGER_GROUP,
+    accountName: "Bank Account",
+    searchPatterns: ["^Bank Account$"],
+    prefix: "BANK",
+    userId,
+    extra: {
+      description: "Auto-created default bank ledger for payment receipts",
+    },
+  });
 };
 
 const getAdjustmentSource = ({ paymentMode = "", adjustmentSource = "", reference = "", notes = "" } = {}) => {
@@ -644,25 +722,17 @@ export const recordPaymentForInvoice = async ({
   }
 
   const accounts = await ensureInvoiceAccounts(invoice, userId);
-  const Account = await getAccountModel();
-  const paymentLedgerConfig = PAYMENT_MODE_TO_LEDGER[paymentMode] || PAYMENT_MODE_TO_LEDGER.BANK_TRANSFER;
-  const paymentLedger = bankLedgerId
-    ? {
-        account: await Account.findOne({
-          _id: bankLedgerId,
-          companyId: normalizeCompanyId(companyId),
-          isActive: true,
-        }),
-        autoCreated: false,
-      }
-    : await ensureLedgerAccount({
-        companyId,
-        groupData: paymentLedgerConfig.group,
-        accountName: paymentLedgerConfig.accountName,
-        searchPatterns: [paymentLedgerConfig.accountName, paymentMode?.replaceAll("_", " ") || "bank"],
-        prefix: paymentLedgerConfig.prefix,
-        userId,
-      });
+  const paymentLedger =
+    `${paymentMode}`.toUpperCase() === "CASH"
+      ? await ensureLedgerAccount({
+          companyId,
+          groupData: PAYMENT_MODE_TO_LEDGER.CASH.group,
+          accountName: PAYMENT_MODE_TO_LEDGER.CASH.accountName,
+          searchPatterns: ["^Cash In Hand$"],
+          prefix: PAYMENT_MODE_TO_LEDGER.CASH.prefix,
+          userId,
+        })
+      : await getPaymentBankLedger({ companyId, bankLedgerId, userId });
 
   if (!paymentLedger?.account) {
     throw new AppError("Selected bank ledger not found for payment posting", 404, "recordPaymentForInvoice");
@@ -1115,6 +1185,7 @@ export const recordInvoicePayment = async (req, res, next) => {
       paymentDate,
       reference,
       notes,
+      bankLedgerId,
       expectedAmount,
       adjustmentSource,
     } = req.body;
@@ -1135,6 +1206,7 @@ export const recordInvoicePayment = async (req, res, next) => {
       paymentDate,
       reference,
       notes,
+      bankLedgerId,
       expectedAmount,
       adjustmentSource,
       userId: getUserId(req),
