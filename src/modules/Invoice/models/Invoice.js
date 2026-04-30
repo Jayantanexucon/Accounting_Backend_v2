@@ -1,5 +1,15 @@
 import mongoose from "mongoose";
-import { connectInvoiceDB } from "../../../config/db/invoice.db.js";
+import { getDatabase } from "../../../config/databases.js";
+
+const taxBreakdownSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, default: "GST" },
+    label: { type: String, default: "GST" },
+    rate: { type: Number, default: 0, min: 0 },
+    amount: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
 
 const invoiceLineItemSchema = new mongoose.Schema({
   itemId: { type: String },
@@ -9,6 +19,12 @@ const invoiceLineItemSchema = new mongoose.Schema({
   quantity: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },
   taxableValue: { type: Number, required: true, min: 0 },
+  taxType: { type: String, default: "GST" },
+  taxLabel: { type: String, default: "GST" },
+  taxRate: { type: Number, default: 0, min: 0 },
+  taxAmount: { type: Number, default: 0, min: 0 },
+  combinedTaxRate: { type: Number, default: 0, min: 0 },
+  taxBreakdown: { type: [taxBreakdownSchema], default: [] },
   gstRate: { type: Number, default: 0, min: 0 },
   gstAmount: { type: Number, default: 0, min: 0 },
   cgstAmount: { type: Number, default: 0, min: 0 },
@@ -17,12 +33,16 @@ const invoiceLineItemSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true, min: 0 },
 });
 
-const addressSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  address: { type: String },
-  stateCode: { type: String },
-  gstin: { type: String },
-});
+const addressSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    address: { type: String },
+    stateCode: { type: String },
+    GSTIN: { type: String },
+    gstin: { type: String },
+  },
+  { _id: false }
+);
 
 // Milestone schema for milestone-based invoicing
 const invoiceMilestoneSchema = new mongoose.Schema({
@@ -116,6 +136,10 @@ const invoiceSchema = new mongoose.Schema(
 
     // Financial Totals
     totalTaxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxSummary: { type: [taxBreakdownSchema], default: [] },
+    totalTaxAmount: { type: Number, default: 0, min: 0 },
     totalCGSTAmount: { type: Number, default: 0, min: 0 },
     totalSGSTAmount: { type: Number, default: 0, min: 0 },
     totalIGSTAmount: { type: Number, default: 0, min: 0 },
@@ -133,8 +157,8 @@ const invoiceSchema = new mongoose.Schema(
     // Status
     status: {
       type: String,
-      enum: ["DRAFT", "POSTED", "PARTIALLY_PAID", "PAID", "RECONCILED"],
-      default: "DRAFT",
+      enum: ["PENDING_APPROVAL", "POSTED", "PARTIALLY_PAID", "PAID", "RECONCILED"],
+      default: "PENDING_APPROVAL",
     },
 
     // Accounting Linkage
@@ -197,6 +221,11 @@ const invoiceSchema = new mongoose.Schema(
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approvalDate: { type: Date },
     approvalComments: { type: String },
+    actionType: {
+      type: String,
+      enum: ["create", "update", "delete"],
+      default: "create",
+    },
 
     notes: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -214,14 +243,16 @@ invoiceSchema.index({ companyId: 1, invoiceDate: -1 });
 invoiceSchema.index({ linkedPO: 1, status: 1 });
 
 // Pre-save hook to calculate remainingAmount
-invoiceSchema.pre("save", function (next) {
-  this.remainingAmount = Math.max(0, (this.invoiceAmount || 0) - (this.paidAmount || 0));
+invoiceSchema.pre("save", function () {
+  this.remainingAmount = Math.max(
+    0,
+    (this.invoiceAmount || 0) - (this.paidAmount || 0) - (this.tdsAmount || 0)
+  );
   this.isFullyPaid = this.remainingAmount === 0;
   this.updatedAt = new Date();
-  next();
 });
 
 export const getInvoiceModel = async () => {
-  const db = await connectInvoiceDB();
+  const db = getDatabase("invoice");
   return db.models.Invoice || db.model("Invoice", invoiceSchema);
 };

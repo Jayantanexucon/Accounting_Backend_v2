@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const accountSchema = new mongoose.Schema(
   {
@@ -37,8 +37,7 @@ const accountSchema = new mongoose.Schema(
       trim: true,
     },
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
@@ -48,7 +47,7 @@ const accountSchema = new mongoose.Schema(
     },
     openingType: {
       type: String,
-      enum: ["Debit", "Credit"],
+      enum: ["debit", "credit"],
       required: [true, "Opening type is required"],
     },
     // FIXED: Add scheduleMapping for reporting
@@ -81,14 +80,12 @@ const accountSchema = new mongoose.Schema(
     },
     // Linking to clients/vendors for ledger accounts
     linkedClientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Client",
+      type: String,
       default: null,
       sparse: true,
     },
     linkedVendorId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Vendor",
+      type: String,
       default: null,
       sparse: true,
     },
@@ -112,13 +109,11 @@ const accountSchema = new mongoose.Schema(
       default: true,
     },
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
   },
   {
@@ -140,6 +135,6 @@ accountSchema.index(
 );
 
 export const getAccountModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.Account || db.model("Account", accountSchema);
 };

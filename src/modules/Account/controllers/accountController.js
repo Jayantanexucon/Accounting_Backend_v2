@@ -12,6 +12,85 @@ import {
 } from "../repos/accountRepo.js";
 import { getGroupByIdRepo } from "../repos/groupRepo.js";
 import { getConfigRepo } from "../repos/configRepo.js";
+import { getJournalLineModel } from "../models/JournalLine.js";
+import {
+  enforceScheduleMappingForNature,
+  getAutoScheduleMappingForLedger,
+} from "../utils/scheduleIIIConfig.js";
+
+const deriveLedgerPropertiesFromGroup = (group) => {
+  const nature = group?.nature;
+  const type = nature === "Income" || nature === "Expense" ? "revenueAccount" : "balanceSheet";
+  const openingType = group?.balanceType || (nature === "Liability" || nature === "Equity" || nature === "Income" ? "Credit" : "Debit");
+  const subType =
+    type === "balanceSheet"
+      ? group?.scheduleGroup?.toLowerCase().includes("non-current")
+        ? "nonCurrent"
+        : "current"
+      : null;
+
+  return {
+    type,
+    openingType,
+    subType,
+    scheduleMapping: {
+      reportType: type === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+    },
+  };
+};
+
+const normalizeOpeningType = (value = "Debit") =>
+  `${value}`.toLowerCase() === "credit" ? "credit" : "debit";
+
+const computeClosingForAccount = (account, totalDebit = 0, totalCredit = 0) => {
+  const openingBalance = Number(account.openingBalance || 0);
+  const openingType = normalizeOpeningType(account.openingType);
+  const netBalance =
+    openingType === "debit"
+      ? openingBalance + totalDebit - totalCredit
+      : openingBalance + totalCredit - totalDebit;
+
+  return {
+    closingBalance: Math.abs(netBalance),
+    closingType: netBalance >= 0 ? openingType : openingType === "debit" ? "credit" : "debit",
+  };
+};
+
+const attachAccountBalances = async (accounts = [], companyId) => {
+  if (!accounts.length) return [];
+
+  const JournalLine = await getJournalLineModel();
+  const balances = await JournalLine.aggregate([
+    {
+      $match: {
+        companyId,
+        accountId: { $in: accounts.map((account) => account._id) },
+      },
+    },
+    {
+      $group: {
+        _id: "$accountId",
+        totalDebit: { $sum: "$debitAmount" },
+        totalCredit: { $sum: "$creditAmount" },
+      },
+    },
+  ]);
+
+  const balanceMap = new Map(
+    balances.map((item) => [
+      item._id.toString(),
+      { totalDebit: Number(item.totalDebit || 0), totalCredit: Number(item.totalCredit || 0) },
+    ])
+  );
+
+  return accounts.map((account) => {
+    const totals = balanceMap.get(account._id.toString()) || { totalDebit: 0, totalCredit: 0 };
+    return {
+      ...account,
+      ...computeClosingForAccount(account, totals.totalDebit, totals.totalCredit),
+    };
+  });
+};
 
 const getNextAccountCode = async (companyId, groupId) => {
   try {
@@ -31,7 +110,8 @@ const getNextAccountCode = async (companyId, groupId) => {
     }
 
     const lastCodeInRange = await getLastAccountCodeInRangeRepo(companyId, groupName);
-    const nextCode = lastCodeInRange ? lastCodeInRange + 1 : range.start;
+    const lastUsedCode = Number(lastCodeInRange?.code || 0);
+    const nextCode = lastUsedCode ? lastUsedCode + 1 : range.start;
 
     if (nextCode > range.end) {
       throw new AppError(`Account code range exhausted for group: ${groupName}`, 400, "getNextAccountCode");
@@ -46,12 +126,44 @@ const getNextAccountCode = async (companyId, groupId) => {
 
 export const createAccount = async (req, res, next) => {
   try {
-    const { code, name, type, groupId, companyId, openingBalance, openingType, linkedClientId, linkedVendorId } =
+    const {
+      code,
+      name,
+      groupId,
+      companyId,
+      openingBalance,
+      openingType,
+      linkedClientId,
+      linkedVendorId,
+      description,
+      scheduleMainHead,
+      scheduleGroup,
+      scheduleLineItem,
+      scheduleMapping,
+    } =
       req.body;
 
-    if (!name || !type || !groupId || !companyId) {
-      throw new AppError("Missing required fields: name, type, groupId, companyId", 400, "createAccount");
+    if (!name || !groupId || !companyId) {
+      throw new AppError("Missing required fields: name, groupId, companyId", 400, "createAccount");
     }
+
+    const group = await getGroupByIdRepo(groupId);
+    if (!group) {
+      throw new AppError("Selected group not found", 404, "createAccount");
+    }
+
+    if (String(group.companyId) !== String(companyId)) {
+      throw new AppError("Selected group does not belong to this company", 400, "createAccount");
+    }
+
+    const derivedProperties = deriveLedgerPropertiesFromGroup(group);
+    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
+      ...(scheduleMapping || {}),
+      scheduleMainHead,
+      scheduleGroup,
+      scheduleLineItem,
+      noteNo: scheduleMapping?.noteNo || group.noteNo || null,
+    });
 
     let accountCode = code;
     if (!accountCode) {
@@ -66,13 +178,21 @@ export const createAccount = async (req, res, next) => {
     const accountData = {
       code: accountCode,
       name,
-      type,
+      type: derivedProperties.type,
       groupId,
+      groupName: group.name,
       companyId,
-      openingBalance: openingBalance || 0,
-      openingType: openingType || "Debit",
-      linkedClientId,
-      linkedVendorId,
+      openingBalance: Number(openingBalance || 0),
+      openingType: normalizeOpeningType(openingType || derivedProperties.openingType),
+      subType: derivedProperties.subType,
+      linkedClientId: linkedClientId || null,
+      linkedVendorId: linkedVendorId || null,
+      description: description || "",
+      scheduleMapping: {
+        ...enforcedScheduleMapping,
+        reportType: derivedProperties.scheduleMapping.reportType,
+      },
+      createdBy: req.user?.id,
     };
 
     const account = await createAccountRepo(accountData);
@@ -96,6 +216,43 @@ export const createAccount = async (req, res, next) => {
   }
 };
 
+export const suggestScheduleMapping = async (req, res, next) => {
+  try {
+    const { ledgerName = "", groupId, groupName, companyId } = req.query;
+
+    if (!companyId || (!groupId && !groupName)) {
+      throw new AppError("companyId and groupId or groupName are required", 400, "suggestScheduleMapping");
+    }
+
+    let group = null;
+    if (groupId) {
+      group = await getGroupByIdRepo(groupId);
+    } else {
+      const { getGroupsRepo } = await import("../repos/groupRepo.js");
+      const groups = await getGroupsRepo({ companyId, name: groupName });
+      group = groups?.[0] || null;
+    }
+
+    if (!group || String(group.companyId) !== String(companyId)) {
+      throw new AppError("Selected group not found", 404, "suggestScheduleMapping");
+    }
+
+    const mapping = getAutoScheduleMappingForLedger(ledgerName, group);
+
+    new ApiResponse({
+      statusCode: 200,
+      data: {
+        ...mapping,
+        nature: group.nature,
+        balanceType: group.balanceType,
+      },
+      message: "Schedule mapping suggested successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getAllAccounts = async (req, res, next) => {
   try {
     const { companyId, groupId, type } = req.query;
@@ -109,10 +266,11 @@ export const getAllAccounts = async (req, res, next) => {
     if (type) filter.type = type;
 
     const accounts = await getAccountsRepo(filter);
+    const accountsWithBalances = await attachAccountBalances(accounts, companyId);
 
     new ApiResponse({
       statusCode: 200,
-      data: accounts,
+      data: accountsWithBalances,
       message: "Accounts retrieved successfully",
     }).send(res);
   } catch (error) {
@@ -129,10 +287,14 @@ export const getAccountById = async (req, res, next) => {
     }
 
     const account = await getAccountByIdRepo(id);
+    if (!account) {
+      throw new AppError("Account not found", 404, "getAccountById");
+    }
+    const [accountWithBalance] = await attachAccountBalances([account], account.companyId);
 
     new ApiResponse({
       statusCode: 200,
-      data: account,
+      data: accountWithBalance,
       message: "Account retrieved successfully",
     }).send(res);
   } catch (error) {
@@ -143,13 +305,46 @@ export const getAccountById = async (req, res, next) => {
 export const updateAccount = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
 
     if (!id) {
       throw new AppError("Account ID is required", 400, "updateAccount");
     }
 
     const oldAccount = await getAccountByIdRepo(id);
+    if (!oldAccount) {
+      throw new AppError("Account not found", 404, "updateAccount");
+    }
+
+    const nextGroupId = req.body.groupId || oldAccount.groupId?._id || oldAccount.groupId;
+    const group = await getGroupByIdRepo(nextGroupId);
+    if (!group) {
+      throw new AppError("Selected group not found", 404, "updateAccount");
+    }
+
+    const derivedProperties = deriveLedgerPropertiesFromGroup(group);
+    const enforcedScheduleMapping = enforceScheduleMappingForNature(group.nature, {
+      ...(req.body.scheduleMapping || {}),
+      scheduleMainHead: req.body.scheduleMainHead,
+      scheduleGroup: req.body.scheduleGroup,
+      scheduleLineItem: req.body.scheduleLineItem,
+      noteNo: req.body.scheduleMapping?.noteNo || oldAccount.scheduleMapping?.noteNo || group.noteNo || null,
+    });
+
+    const updateData = {
+      ...req.body,
+      type: derivedProperties.type,
+      groupId: nextGroupId,
+      groupName: group.name,
+      openingBalance:
+        req.body.openingBalance !== undefined ? Number(req.body.openingBalance || 0) : oldAccount.openingBalance,
+      openingType: normalizeOpeningType(req.body.openingType || derivedProperties.openingType),
+      subType: derivedProperties.subType,
+      scheduleMapping: {
+        ...enforcedScheduleMapping,
+        reportType: derivedProperties.scheduleMapping.reportType,
+      },
+      updatedBy: req.user?.id,
+    };
 
     const updatedAccount = await updateAccountRepo(id, updateData);
 
@@ -237,24 +432,80 @@ export const getLedger = async (req, res, next) => {
     }
 
     const account = await getAccountByIdRepo(accountId);
+    if (!account || String(account.companyId) !== String(companyId)) {
+      throw new AppError("Account not found", 404, "getLedger");
+    }
 
-    const filter = {
+    const JournalLine = await getJournalLineModel();
+    const lines = await JournalLine.find({
       accountId,
       companyId,
-    };
+    })
+      .populate({
+        path: "journalId",
+        select: "number date narration sourceType referenceNumber partyName externalDocNo createdAt",
+      })
+      .sort({ createdAt: 1 })
+      .lean();
 
-    if (startDate && endDate) {
-      filter.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      };
+    let openingBalance =
+      `${account.openingType}`.toLowerCase() === "debit"
+        ? Number(account.openingBalance || 0)
+        : -Number(account.openingBalance || 0);
+
+    const filteredLines = [];
+    const start = startDate ? new Date(startDate) : null;
+    const end = endDate ? new Date(endDate) : null;
+    if (end) end.setHours(23, 59, 59, 999);
+
+    for (const line of lines) {
+      if (!line.journalId) continue;
+      const journalDate = new Date(line.journalId.date || line.createdAt);
+      if (Number.isNaN(journalDate.getTime())) continue;
+
+      if (start && journalDate < start) {
+        // Add to true opening balance
+        const debit = Number(line.debitAmount || 0);
+        const credit = Number(line.creditAmount || 0);
+        openingBalance += debit - credit;
+      } else {
+        if (end && journalDate > end) continue;
+        filteredLines.push(line);
+      }
     }
+
+    let runningBalance = openingBalance;
+
+    const entries = filteredLines.map((line) => {
+      const debit = Number(line.debitAmount || 0);
+      const credit = Number(line.creditAmount || 0);
+      runningBalance += debit - credit;
+
+      return {
+        date: line.journalId.date,
+        narration: line.journalId.narration,
+        debit,
+        credit,
+        balance: runningBalance,
+        sourceType: line.journalId.sourceType || "MANUAL",
+        referenceNumber: line.journalId.referenceNumber || line.journalId.number,
+        partyName: line.journalId.partyName || null,
+        externalDocNo: line.journalId.externalDocNo || null,
+        createdAt: line.journalId.createdAt || line.createdAt,
+        toBy: debit > 0 ? "To" : "By",
+        counters: [],
+      };
+    });
 
     new ApiResponse({
       statusCode: 200,
       data: {
         account,
-        message: "Ledger feature requires JournalLine data integration",
+        entries,
+        openingBalance: Math.abs(openingBalance),
+        openingType: openingBalance >= 0 ? "debit" : "credit",
+        closingBalance: Math.abs(runningBalance),
+        closingType: runningBalance >= 0 ? "debit" : "credit",
       },
       message: "Ledger retrieved successfully",
     }).send(res);

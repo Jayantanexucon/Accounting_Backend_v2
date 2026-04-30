@@ -1,6 +1,7 @@
 import {
   createClientRepo,
   findClientRepo,
+  findClientsRepo,
   findClientByIdRepo,
   updateClientRepo,
   deleteClientRepo,
@@ -9,6 +10,7 @@ import {
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeEntityPayload } from "../utils/entityMasterData.js";
 
 // Generate clientCode
 const generateClientCode = () => {
@@ -18,7 +20,7 @@ const generateClientCode = () => {
 export const createClientController = async (req, res, next) => {
   try {
     const { companyId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "client");
     const userId = req.user?._id;
 
     if (!data.clientName) {
@@ -64,9 +66,8 @@ export const createClientController = async (req, res, next) => {
 
 export const getClientsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    const clients = await findClientRepo({ companyId }, false);
+    // Always return all clients (global master data) - companyId filter removed
+    const clients = await findClientsRepo({}, true);
 
     return new ApiResponse({
       message: "Clients fetched successfully",
@@ -98,9 +99,8 @@ export const getClientByIdController = async (req, res, next) => {
 
 export const getPendingClientRequestsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    const clients = await findClientRepo({ companyId }, false);
+    // Always return all pending clients (global master data) - companyId filter removed
+    const clients = await findClientsRepo({}, true);
 
     const pendingClients = clients?.ref?.filter((r) => r.status === "Pending") || [];
 
@@ -170,7 +170,7 @@ export const clientStatusController = async (req, res, next) => {
 export const updateClientController = async (req, res, next) => {
   try {
     const { clientId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "client");
     const userId = req.user?._id;
 
     const oldClient = await findClientByIdRepo(clientId, {}, false);
@@ -243,14 +243,16 @@ export const deleteClientController = async (req, res, next) => {
 
 export const getClientsPaginatedController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
+    // Always return all clients (global master data) - companyId filter removed
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 
     const result = await getPaginatedClientsRepo({
-      companyId,
       page,
       limit,
+      search: req.query.search,
+      status: req.query.status,
+      country: req.query.country,
     });
 
     return new ApiResponse({

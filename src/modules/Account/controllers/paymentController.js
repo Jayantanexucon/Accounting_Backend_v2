@@ -31,9 +31,9 @@ export const createPayment = async (req, res, next) => {
       notes,
     } = req.body;
 
-    if (!invoiceId || !companyId || !clientId || !amountPaid || !paymentMode) {
+    if (!invoiceId || !companyId || (!amountPaid && !tdsAmount) || !paymentMode) {
       throw new AppError(
-        "Missing required fields: invoiceId, companyId, clientId, amountPaid, paymentMode",
+        "Missing required fields: invoiceId, companyId, payment amount or TDS amount, paymentMode",
         400,
         "createPayment"
       );
@@ -53,6 +53,8 @@ export const createPayment = async (req, res, next) => {
       reference,
       notes,
       status: "PENDING",
+      createdBy: req.user?.id,
+      updatedBy: req.user?.id,
     };
 
     const payment = await createPaymentRepo(paymentData);

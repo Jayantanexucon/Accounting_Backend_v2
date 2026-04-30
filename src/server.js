@@ -1,17 +1,25 @@
-import app, { initializeDatabases } from "./app.js";
 import dotenv from "dotenv";
-import { configurePassport } from "./config/passport.js";
-
 dotenv.config();
 
-const PORT = process.env.PORT || 5000;
+import app, { initializeDatabases, registerModuleRoutes, registerErrorHandlers } from "./app.js";
+import { configurePassport } from "./config/passport.js";
+
+const PORT = process.env.PORT || 8080;
 
 const startServer = async () => {
   try {
     // Configure Passport strategies
     configurePassport();
     
+    // Initialize databases first
     await initializeDatabases();
+    
+    // ✅ Register module routes AFTER databases are initialized
+    registerModuleRoutes();
+    
+    // ✅ Register error handlers AFTER all routes are registered
+    registerErrorHandlers();
+    
     app.listen(PORT, () => {
       console.log(`✅ Server running on port ${PORT}`);
     });

@@ -2,6 +2,7 @@ import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
 import { transactionManager } from "../../../utils/transactionManager.js";
+import path from "path";
 import {
   createInvoiceRepo,
   getInvoiceByIdRepo,
@@ -16,20 +17,262 @@ import {
   getInvoiceStatsRepo,
   updateInvoicePaymentRepo,
   updateInvoiceAccountingStatusRepo,
+  countInvoicesRepo,
 } from "../repos/invoiceRepo.js";
-import { createJournalRepo, updateJournalRepo } from "../../Account/repos/journalRepo.js";
+import { createJournalRepo } from "../../Account/repos/journalRepo.js";
+import { getAccountsRepo } from "../../Account/repos/accountRepo.js";
+import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
 import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
-import { exportInvoice, exportInvoiceList } from "../services/invoiceExportService.js";
+import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
+import { exportInvoice, exportInvoiceList, prepareInvoiceData } from "../services/invoiceExportService.js";
+import {
+  generateWordDocument,
+  generatePdfFromWord,
+  sendDocumentResponse,
+} from "../../../utils/documentGenerator.js";
 import {
   sendInvoiceCreatedNotification,
   sendInvoiceApprovedNotification,
   sendInvoiceRejectedNotification,
   sendPaymentRecordedNotification,
 } from "../services/notificationService.js";
+import {
+  buildTaxMeta,
+  normalizeLineItemTax,
+  round2,
+} from "../utils/taxNormalization.js";
 
 const generateInvoiceNumber = async (companyId) => {
   const timestamp = Date.now();
   return `INV-${companyId.toString().slice(-4)}-${timestamp}`;
+};
+
+const generateJournalNumber = (companyId) => {
+  const timestamp = Date.now();
+  return `JRN-${companyId.toString().slice(-4)}-${timestamp}`;
+};
+
+const normalizeStateCode = (value = "") => {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) return "";
+  const digitMatch = normalized.match(/^(\d{2})/);
+  if (digitMatch) return digitMatch[1];
+  const alphaMatch = normalized.match(/^([A-Z]{2})/);
+  return alphaMatch ? alphaMatch[1] : normalized;
+};
+
+const getGstSplit = (fromAddress = {}, toAddress = {}) => {
+  const fromStateCode = normalizeStateCode(fromAddress?.stateCode);
+  const toStateCode = normalizeStateCode(toAddress?.stateCode);
+
+  if (!fromStateCode || !toStateCode) return undefined;
+  return fromStateCode === toStateCode ? "INTRA" : "INTER";
+};
+
+const getCompanyStateCode = (company = {}) =>
+  normalizeStateCode(company?.taxDetails?.gstin || company?.registeredAddress?.stateCode);
+
+const getPartyStateCode = (party = {}) =>
+  normalizeStateCode(party?.GSTIN || party?.gstin || party?.stateCode);
+
+const getCompanyBasedGstSplit = (company = {}, party = {}) => {
+  const companyStateCode = getCompanyStateCode(company);
+  const partyStateCode = getPartyStateCode(party);
+
+  if (!companyStateCode || !partyStateCode) return undefined;
+  return companyStateCode === partyStateCode ? "INTRA" : "INTER";
+};
+
+const findTaxPayableAccount = (accounts = [], preferredType = "GST") => {
+  const normalizedType = String(preferredType || "GST").trim().toUpperCase();
+  const desiredName = `${normalizedType.toLowerCase()} payable`;
+
+  return (
+    accounts.find((acc) => acc.name?.toLowerCase() === desiredName) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes(desiredName)) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes(`${normalizedType.toLowerCase()} output`)) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes("gst payable")) ||
+    accounts.find((acc) => acc.name?.toLowerCase().includes("output gst")) ||
+    accounts.find((acc) => acc.name?.toLowerCase() === "gst") ||
+    null
+  );
+};
+
+const getMatchedPoItem = (po, item = {}) => {
+  const poItems = Array.isArray(po?.items) ? po.items : [];
+  const requestedKeys = [
+    item.poItemId,
+    item.itemId,
+    item._id?.toString?.(),
+    item.description,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+
+  return (
+    poItems.find((poItem) => {
+      const poKeys = [
+        poItem.itemId,
+        poItem._id?.toString?.(),
+        poItem.description,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase());
+
+      return requestedKeys.some((key) => poKeys.includes(key));
+    }) || null
+  );
+};
+
+const ensureSalesJournalForInvoice = async (invoice, userId) => {
+  if (!invoice || invoice.salesJournalId) {
+    return invoice?.salesJournalId || null;
+  }
+
+  // 1. Fetch Company-specific Accounts to find the correct ledgers
+  const accounts = await getAccountsRepo({ companyId: String(invoice.companyId) });
+  
+  // Find Client Account (Accounts Receivable)
+  // We try to match by linkedClientId if available, or by name as a fallback
+  const clientAccount = accounts.find(acc => 
+    (acc.linkedClientId && String(acc.linkedClientId) === String(invoice.billTo?._id)) || 
+    (acc.partyName && acc.partyName.toLowerCase() === invoice.billTo?.name?.toLowerCase()) ||
+    (acc.name && acc.name.toLowerCase() === invoice.billTo?.name?.toLowerCase())
+  );
+  
+  // Find Sales Account
+  const salesAccount = accounts.find(acc => acc.name.toLowerCase().includes("sales"));
+
+  // Find TDS Receivable Account
+  const tdsAccount = accounts.find(acc => 
+    acc.name.toLowerCase().includes("tds receivable") || 
+    acc.name.toLowerCase().includes("tds on sale") ||
+    acc.name.toLowerCase() === "tds"
+  );
+
+  // If critical accounts are missing, we log but continue (or we could throw error)
+  // For now, we proceed if we have at least client and sales
+  if (!clientAccount || !salesAccount) {
+    console.warn(`[ensureSalesJournalForInvoice] Missing critical accounts for invoice ${invoice.invoiceNo}. Client Account: ${!!clientAccount}, Sales Account: ${!!salesAccount}`);
+  }
+
+  const taxableValue = Number(invoice.totalTaxableValue || 0);
+  const totalGST = Number(invoice.totalGSTAmount || 0);
+  const totalCGST = Number(invoice.totalCGSTAmount || 0);
+  const totalSGST = Number(invoice.totalSGSTAmount || 0);
+  const totalIGST = Number(invoice.totalIGSTAmount || 0);
+  const tdsAmount = Number(invoice.tdsAmount || 0);
+  // Net Receivable = Taxable + GST - TDS
+  const netReceivable = taxableValue + totalGST - tdsAmount;
+
+  const journalNumber = generateJournalNumber(invoice.companyId);
+
+  // 3. Create Journal Header
+  const journalData = {
+    number: journalNumber,
+    voucherType: "SALES",
+    date: invoice.invoiceDate || new Date(),
+    referenceNumber: invoice.invoiceNo,
+    externalDocNo: invoice.poNumber || invoice.linkedPO?.poNumber || "",
+    narration: `Sales posting for invoice ${invoice.invoiceNo}`,
+    companyId: String(invoice.companyId),
+    sourceType: "INVOICE",
+    sourceId: String(invoice._id),
+    partyName: invoice.billTo?.name || "",
+    totalDebit: taxableValue + totalGST, // Total debits (Receivable + TDS)
+    totalCredit: taxableValue + totalGST, // Total credits (Sales + GST)
+    status: "Approved",
+    approvalStatus: "Approved",
+    approvedBy: userId,
+    approvalDate: new Date(),
+    createdBy: userId,
+    updatedBy: userId,
+  };
+
+  const journal = await createJournalRepo(journalData);
+
+  if (journal) {
+    // 4. Prepare Journal Lines
+    const journalLines = [];
+    let lineNumber = 1;
+
+    // Dr. Accounts Receivable (Net Amount)
+    if (clientAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: clientAccount._id,
+        accountCode: clientAccount.code,
+        accountName: clientAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: netReceivable,
+        creditAmount: 0,
+        description: `Receivable for INV ${invoice.invoiceNo} from ${invoice.billTo?.name}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    // Dr. TDS Receivable
+    if (tdsAmount > 0 && tdsAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: tdsAccount._id,
+        accountCode: tdsAccount.code,
+        accountName: tdsAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: tdsAmount,
+        creditAmount: 0,
+        description: `TDS deducted on INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    // Cr. Sales (Taxable Value)
+    if (salesAccount) {
+      journalLines.push({
+        journalId: journal._id,
+        accountId: salesAccount._id,
+        accountCode: salesAccount.code,
+        accountName: salesAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: 0,
+        creditAmount: taxableValue,
+        description: `Sales revenue from INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    const taxLines = [
+      { type: "CGST", amount: totalCGST },
+      { type: "SGST", amount: totalSGST },
+      { type: "IGST", amount: totalIGST },
+    ].filter((entry) => entry.amount > 0);
+
+    if (taxLines.length === 0 && totalGST > 0) {
+      taxLines.push({ type: "GST", amount: totalGST });
+    }
+
+    for (const taxLine of taxLines) {
+      const gstAccount = findTaxPayableAccount(accounts, taxLine.type);
+      if (!gstAccount) continue;
+      journalLines.push({
+        journalId: journal._id,
+        accountId: gstAccount._id,
+        accountCode: gstAccount.code,
+        accountName: gstAccount.name,
+        companyId: String(invoice.companyId),
+        debitAmount: 0,
+        creditAmount: taxLine.amount,
+        description: `${taxLine.type} payable on INV ${invoice.invoiceNo}`,
+        lineNumber: lineNumber++,
+      });
+    }
+
+    if (journalLines.length > 0) {
+      await createMultipleJournalLinesRepo(journalLines);
+    }
+  }
+
+  return journal?._id || null;
 };
 
 export const createInvoice = async (req, res, next) => {
@@ -43,6 +286,19 @@ export const createInvoice = async (req, res, next) => {
       items,
       companyId,
       notes,
+      totalTaxableValue: bodyTaxableValue,
+      totalCGSTAmount: bodyCGST,
+      totalSGSTAmount: bodySGST,
+      totalIGSTAmount: bodyIGST,
+      totalGSTAmount: bodyGST,
+      totalTaxAmount: bodyTotalTaxAmount,
+      taxType: bodyTaxType,
+      taxLabel: bodyTaxLabel,
+      taxSummary: bodyTaxSummary,
+      invoiceAmount: bodyInvoiceAmount,
+      tdsAmount: bodyTDS,
+      netPayable: bodyNetPayable,
+      valueInWords: bodyValueInWords,
     } = req.body;
 
     if (!invoiceDate || !dueDate || !billTo || !shipTo || !items || items.length === 0 || !companyId) {
@@ -53,20 +309,54 @@ export const createInvoice = async (req, res, next) => {
       );
     }
 
-    let totalTaxableValue = 0;
-    let totalCGSTAmount = 0;
-    let totalSGSTAmount = 0;
-    let totalIGSTAmount = 0;
-    let totalGSTAmount = 0;
-    let invoiceAmount = 0;
+    const [linkedPOData, company] = await Promise.all([
+      linkedPO ? getPurchaseOrderByIdRepo(linkedPO) : Promise.resolve(null),
+      companyId ? findCompanyByIdRepo(companyId) : Promise.resolve(null),
+    ]);
+    const gstSplit =
+      getCompanyBasedGstSplit(company, linkedPOData?.vendor || billTo) ||
+      getGstSplit(linkedPOData?.vendor || billTo, linkedPOData?.deliverTo || shipTo);
 
-    items.forEach((item) => {
-      totalTaxableValue += item.taxableValue || 0;
-      totalCGSTAmount += item.cgstAmount || 0;
-      totalSGSTAmount += item.sgstAmount || 0;
-      totalIGSTAmount += item.igstAmount || 0;
-      totalGSTAmount += item.gstAmount || 0;
-      invoiceAmount += item.totalAmount || 0;
+    let totalTaxableValue = 0;
+    let invoiceAmount = 0;
+    const normalizedItems = items.map((item) => {
+      const matchedPOItem = getMatchedPoItem(linkedPOData, item);
+      const sourceItem = {
+        ...(matchedPOItem || {}),
+        ...item,
+      };
+      const normalizedTax = normalizeLineItemTax(sourceItem, {
+        taxType: bodyTaxType || linkedPOData?.taxType || matchedPOItem?.taxType,
+        taxLabel: bodyTaxLabel || linkedPOData?.taxLabel || matchedPOItem?.taxLabel,
+        taxRate: matchedPOItem?.taxRate ?? matchedPOItem?.gstRate,
+        taxAmount: matchedPOItem?.taxAmount ?? matchedPOItem?.gstAmount,
+        gstRate: matchedPOItem?.gstRate,
+        gstAmount: matchedPOItem?.gstAmount,
+        amount: matchedPOItem?.taxAmount ?? matchedPOItem?.gstAmount,
+        rate: matchedPOItem?.taxRate ?? matchedPOItem?.gstRate,
+        gstSplit,
+      });
+      const taxableValue = Number(item.taxableValue ?? matchedPOItem?.taxableValue ?? 0);
+      const lineTotalAmount =
+        Number(item.totalAmount || item.total || 0) ||
+        round2(taxableValue + Number(normalizedTax.taxAmount || 0));
+
+      totalTaxableValue += taxableValue;
+      invoiceAmount += lineTotalAmount;
+      return {
+        ...sourceItem,
+        poItemId: item.poItemId || item.itemId || matchedPOItem?.itemId || matchedPOItem?._id,
+        totalAmount: lineTotalAmount,
+        taxableValue,
+        ...normalizedTax,
+      };
+    });
+    const taxMeta = buildTaxMeta({
+      taxType: bodyTaxType || linkedPOData?.taxType,
+      taxLabel: bodyTaxLabel || linkedPOData?.taxLabel,
+      taxSummary: bodyTaxSummary || linkedPOData?.taxSummary,
+      totalTaxAmount: bodyTotalTaxAmount ?? bodyGST,
+      items: normalizedItems,
     });
 
     const invoiceNumber = await generateInvoiceNumber(companyId);
@@ -75,22 +365,29 @@ export const createInvoice = async (req, res, next) => {
       companyId,
       invoiceNo: invoiceNumber,
       linkedPO,
+      poNumber: req.body.poNumber || linkedPOData?.poNumber,
       invoiceDate: new Date(invoiceDate),
       dueDate: new Date(dueDate),
       billTo,
       shipTo,
-      items,
-      totalTaxableValue,
-      totalCGSTAmount,
-      totalSGSTAmount,
-      totalIGSTAmount,
-      totalGSTAmount,
-      invoiceAmount,
-      amountDue: invoiceAmount,
-      netPayable: invoiceAmount,
-      remainingAmount: invoiceAmount,
-      valueInWords: `${invoiceAmount} only`,
+      items: normalizedItems,
+      totalTaxableValue: bodyTaxableValue ?? round2(totalTaxableValue),
+      taxType: taxMeta.taxType,
+      taxLabel: taxMeta.taxLabel,
+      taxSummary: taxMeta.taxSummary,
+      totalTaxAmount: bodyTotalTaxAmount ?? taxMeta.totalTaxAmount,
+      totalCGSTAmount: bodyCGST ?? taxMeta.totalCGSTAmount,
+      totalSGSTAmount: bodySGST ?? taxMeta.totalSGSTAmount,
+      totalIGSTAmount: bodyIGST ?? taxMeta.totalIGSTAmount,
+      totalGSTAmount: bodyGST ?? taxMeta.totalGSTAmount,
+      invoiceAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
+      amountDue: bodyInvoiceAmount ?? round2(invoiceAmount),
+      netPayable: bodyNetPayable ?? round2(invoiceAmount),
+      remainingAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
+      tdsAmount: bodyTDS || 0,
+      valueInWords: bodyValueInWords || `${invoiceAmount} only`,
       notes,
+      actionType: "create",
       createdBy: req.user?.id,
       updatedBy: req.user?.id,
     };
@@ -131,25 +428,85 @@ export const createInvoice = async (req, res, next) => {
 
 export const getAllInvoices = async (req, res, next) => {
   try {
-    const { companyId, status, startDate, endDate } = req.query;
+    const {
+      companyId,
+      status,
+      approvalStatus,
+      startDate,
+      endDate,
+      invoiceDateFrom,
+      invoiceDateTo,
+      invoiceNo,
+      clientName,
+      paymentStatus,
+      journalPosted,
+      createdBy,
+      createdAtFrom,
+      createdAtTo,
+      salesJournalPostedAtFrom,
+      salesJournalPostedAtTo,
+      page,
+      limit,
+    } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllInvoices");
     }
 
-    let invoices;
+    const filter = { companyId };
+    if (status) filter.status = status;
+    if (approvalStatus) filter.approvalStatus = approvalStatus;
 
-    if (startDate && endDate) {
-      invoices = await getInvoicesByDateRangeRepo(companyId, startDate, endDate);
-    } else {
-      const filter = { companyId };
-      if (status) filter.status = status;
-      invoices = await getInvoicesRepo(filter);
+    // Advanced Filters
+    if (invoiceNo) filter.invoiceNo = { $regex: invoiceNo, $options: "i" };
+    if (clientName) filter["billTo.name"] = { $regex: clientName, $options: "i" };
+    if (createdBy) filter.createdBy = createdBy;
+
+    if (paymentStatus) {
+      if (paymentStatus === "fully_paid") filter.status = { $in: ["PAID", "RECONCILED"] };
+      else if (paymentStatus === "partially_paid") filter.status = "PARTIALLY_PAID";
+      else if (paymentStatus === "unpaid") filter.status = "POSTED";
     }
+
+    if (journalPosted === "yes") filter.salesJournalId = { $exists: true, $ne: null };
+    else if (journalPosted === "no") filter.salesJournalId = null;
+
+    // Date Range Filters
+    const applyDateRange = (field, from, to) => {
+      if (from || to) {
+        if (!filter[field]) filter[field] = {};
+        if (from) filter[field].$gte = new Date(from);
+        if (to) filter[field].$lte = new Date(to);
+      }
+    };
+
+    // Use specific range if available, fallback to generic startDate/endDate for invoiceDate
+    applyDateRange("invoiceDate", invoiceDateFrom || startDate, invoiceDateTo || endDate);
+    applyDateRange("createdAt", createdAtFrom, createdAtTo);
+    applyDateRange("approvalDate", salesJournalPostedAtFrom, salesJournalPostedAtTo);
+
+
+    const pageNo = Math.max(1, Number(page || 1));
+    const pageLimit = Math.max(0, Number(limit || 0));
+
+    const [invoices, total] = await Promise.all([
+      getInvoicesRepo(filter, {
+        limit: pageLimit,
+        skip: pageLimit > 0 ? (pageNo - 1) * pageLimit : 0,
+        sort: { createdAt: -1 }, // Ensure newest first
+      }),
+      countInvoicesRepo(filter),
+    ]);
 
     new ApiResponse({
       statusCode: 200,
       data: invoices,
+      meta: {
+        total,
+        page: pageNo,
+        limit: pageLimit,
+        totalPages: pageLimit > 0 ? Math.ceil(total / pageLimit) : 1,
+      },
       message: "Invoices retrieved successfully",
     }).send(res);
   } catch (error) {
@@ -187,9 +544,54 @@ export const updateInvoice = async (req, res, next) => {
     }
 
     const oldInvoice = await getInvoiceByIdRepo(id);
+    const [linkedPOData, company] = await Promise.all([
+      oldInvoice?.linkedPO ? getPurchaseOrderByIdRepo(oldInvoice.linkedPO) : Promise.resolve(null),
+      oldInvoice?.companyId ? findCompanyByIdRepo(oldInvoice.companyId) : Promise.resolve(null),
+    ]);
+
+    let normalizedUpdateData = { ...updateData };
+    if (Array.isArray(normalizedUpdateData.items) || Array.isArray(normalizedUpdateData.taxSummary)) {
+      if (Array.isArray(normalizedUpdateData.items)) {
+        const gstSplit =
+          getCompanyBasedGstSplit(company, normalizedUpdateData.billTo || linkedPOData?.vendor || oldInvoice.billTo) ||
+          getGstSplit(
+            linkedPOData?.vendor || normalizedUpdateData.billTo || oldInvoice.billTo,
+            linkedPOData?.deliverTo || normalizedUpdateData.shipTo || oldInvoice.shipTo,
+          );
+        normalizedUpdateData.items = normalizedUpdateData.items.map((item) => ({
+          ...item,
+          totalAmount: Number(item.totalAmount || item.total || 0),
+          ...normalizeLineItemTax(item, {
+            taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
+            taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
+            gstSplit,
+          }),
+        }));
+      }
+      const taxMeta = buildTaxMeta({
+        taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
+        taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
+        taxSummary: normalizedUpdateData.taxSummary,
+        totalTaxAmount: normalizedUpdateData.totalTaxAmount,
+        items: normalizedUpdateData.items || oldInvoice.items || [],
+      });
+      normalizedUpdateData = {
+        ...normalizedUpdateData,
+        taxType: taxMeta.taxType,
+        taxLabel: taxMeta.taxLabel,
+        taxSummary: taxMeta.taxSummary,
+        totalTaxAmount: taxMeta.totalTaxAmount,
+        totalGSTAmount: taxMeta.totalGSTAmount,
+        totalCGSTAmount: taxMeta.totalCGSTAmount,
+        totalSGSTAmount: taxMeta.totalSGSTAmount,
+        totalIGSTAmount: taxMeta.totalIGSTAmount,
+      };
+    }
 
     const updatedInvoice = await updateInvoiceRepo(id, {
-      ...updateData,
+      ...normalizedUpdateData,
+      actionType: "update",
+      approvalStatus: "Pending",
       updatedBy: req.user?.id,
     });
 
@@ -201,7 +603,7 @@ export const updateInvoice = async (req, res, next) => {
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
-      changes: updateData,
+      changes: normalizedUpdateData,
       oldValues: oldInvoice,
       description: `Invoice updated: ${oldInvoice.invoiceNo}`,
     });
@@ -353,9 +755,13 @@ export const approveInvoice = async (req, res, next) => {
 
     const invoice = await getInvoiceByIdRepo(id);
 
+    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
+
     const updateData = {
       approvalStatus: "Approved",
       status: "POSTED",
+      salesJournalId: salesJournalId || invoice.salesJournalId || null,
+      accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
       approvedBy: req.user?.id,
       approvalDate: new Date(),
       approvalComments,
@@ -399,7 +805,7 @@ export const rejectInvoice = async (req, res, next) => {
 
     const updateData = {
       approvalStatus: "Rejected",
-      status: "DRAFT",
+      status: "PENDING_APPROVAL",
       approvedBy: req.user?.id,
       approvalDate: new Date(),
       approvalComments,
@@ -435,13 +841,16 @@ export const recordPayment = async (req, res, next) => {
     const { id } = req.params;
     const { paidAmount, tdsAmount, paymentDate, reference } = req.body;
 
-    if (!id || !paidAmount) {
-      throw new AppError("Invoice ID and paidAmount are required", 400, "recordPayment");
+    const normalizedPaidAmount = Number(paidAmount || 0);
+    const normalizedTdsAmount = Number(tdsAmount || 0);
+
+    if (!id || (normalizedPaidAmount <= 0 && normalizedTdsAmount <= 0)) {
+      throw new AppError("Invoice ID and payment amount or TDS amount are required", 400, "recordPayment");
     }
 
     const invoice = await getInvoiceByIdRepo(id);
 
-    const updatedInvoice = await updateInvoicePaymentRepo(id, paidAmount, tdsAmount || 0);
+    const updatedInvoice = await updateInvoicePaymentRepo(id, normalizedPaidAmount, normalizedTdsAmount);
 
     await createAuditLog({
       companyId: invoice.companyId,
@@ -453,7 +862,7 @@ export const recordPayment = async (req, res, next) => {
       userRole: req.user?.role,
       changes: {
         paidAmount,
-        tdsAmount,
+        tdsAmount: normalizedTdsAmount,
         paymentDate,
         reference,
       },
@@ -464,6 +873,37 @@ export const recordPayment = async (req, res, next) => {
       statusCode: 200,
       data: updatedInvoice,
       message: "Payment recorded successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const postSalesJournal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "postSalesJournal");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (invoice.approvalStatus !== "Approved") {
+      throw new AppError("Invoice must be approved before posting sales journal", 400, "postSalesJournal");
+    }
+
+    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
+    const updatedInvoice = await updateInvoiceRepo(id, {
+      salesJournalId,
+      accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
+      updatedBy: req.user?.id,
+    });
+
+    new ApiResponse({
+      statusCode: 200,
+      data: updatedInvoice,
+      message: "Sales journal posted successfully",
     }).send(res);
   } catch (error) {
     next(error);
@@ -498,6 +938,20 @@ export const exportInvoiceById = async (req, res, next) => {
       changes: { format },
       description: `Invoice ${invoice.invoiceNo} exported as ${format}`,
     });
+
+    if (format === "pdf" && result?.files?.pdfPath) {
+      return res.download(
+        path.resolve(result.files.pdfPath),
+        result.files.pdfFileName,
+      );
+    }
+
+    if (format === "word" && result?.files?.wordPath) {
+      return res.download(
+        path.resolve(result.files.wordPath),
+        result.files.wordFileName,
+      );
+    }
 
     new ApiResponse({
       statusCode: 200,
@@ -720,6 +1174,77 @@ export const createInvoiceWithJournal = async (req, res, next) => {
         message: "Invoice created successfully",
       }).send(res);
     }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download Invoice as Word document
+ */
+export const downloadWordInvoice = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "downloadWordInvoice");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404, "downloadWordInvoice");
+    }
+
+    const templateName = invoice.withSignature
+      ? "Invoice-Template With Signeture.docx"
+      : "Invoice-Template without signeture.docx";
+
+    const templateData = prepareInvoiceData(invoice);
+    const buffer = await generateWordDocument(templateName, templateData);
+
+    sendDocumentResponse(
+      res,
+      buffer,
+      `Invoice_${invoice.invoiceNo}.docx`,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Download Invoice as PDF document
+ */
+export const downloadPdfInvoice = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      throw new AppError("Invoice ID is required", 400, "downloadPdfInvoice");
+    }
+
+    const invoice = await getInvoiceByIdRepo(id);
+
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404, "downloadPdfInvoice");
+    }
+
+    const templateName = invoice.withSignature
+      ? "Invoice-Template With Signeture.docx"
+      : "Invoice-Template without signeture.docx";
+
+    const templateData = prepareInvoiceData(invoice);
+    const wordBuffer = await generateWordDocument(templateName, templateData);
+    const pdfBuffer = await generatePdfFromWord(wordBuffer);
+
+    sendDocumentResponse(
+      res,
+      pdfBuffer,
+      `Invoice_${invoice.invoiceNo}.pdf`,
+      "application/pdf"
+    );
   } catch (error) {
     next(error);
   }

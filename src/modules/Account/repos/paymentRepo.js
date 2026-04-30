@@ -1,11 +1,11 @@
+import mongoose from "mongoose";
 import AppError from "../../../utils/AppError.js";
 import { getPaymentModel } from "../models/Payment.js";
 
 export const createPaymentRepo = async (paymentData) => {
   try {
     const Payment = await getPaymentModel();
-    const payment = await Payment.create(paymentData);
-    return payment.populate("invoiceId");
+    return await Payment.create(paymentData);
   } catch (error) {
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((el) => el.message);
@@ -18,11 +18,7 @@ export const createPaymentRepo = async (paymentData) => {
 export const getPaymentByIdRepo = async (id) => {
   try {
     const Payment = await getPaymentModel();
-    const payment = await Payment.findById(id)
-      .populate("invoiceId")
-      .populate("clientId")
-      .populate("journalId")
-      .lean();
+    const payment = await Payment.findById(id).populate("journalId").lean();
 
     if (!payment) {
       throw new AppError("Payment not found", 404, "getPaymentByIdRepo");
@@ -40,8 +36,6 @@ export const getPaymentsRepo = async (filter = {}, options = {}) => {
     const { sort = { paymentDate: -1 }, limit = 0, skip = 0 } = options;
 
     const payments = await Payment.find(filter)
-      .populate("invoiceId")
-      .populate("clientId")
       .populate("journalId")
       .sort(sort)
       .limit(limit)
@@ -60,7 +54,6 @@ export const getPaymentsByClientRepo = async (clientId, companyId, options = {})
     const { sort = { paymentDate: -1 }, limit = 0, skip = 0 } = options;
 
     const payments = await Payment.find({ clientId, companyId })
-      .populate("invoiceId")
       .populate("journalId")
       .sort(sort)
       .limit(limit)
@@ -77,7 +70,6 @@ export const getPaymentsByInvoiceRepo = async (invoiceId, companyId) => {
   try {
     const Payment = await getPaymentModel();
     const payments = await Payment.find({ invoiceId, companyId })
-      .populate("clientId")
       .populate("journalId")
       .sort({ paymentDate: -1 })
       .lean();
@@ -95,10 +87,7 @@ export const getPaymentsByInvoiceRepo = async (invoiceId, companyId) => {
 export const updatePaymentRepo = async (id, updateData) => {
   try {
     const Payment = await getPaymentModel();
-    const payment = await Payment.findByIdAndUpdate(id, updateData, { new: true })
-      .populate("invoiceId")
-      .populate("clientId")
-      .populate("journalId");
+    const payment = await Payment.findByIdAndUpdate(id, updateData, { new: true }).populate("journalId");
 
     if (!payment) {
       throw new AppError("Payment not found", 404, "updatePaymentRepo");
@@ -163,8 +152,6 @@ export const getPendingReconciledPaymentsRepo = async (companyId, options = {}) 
       companyId,
       $or: [{ reconciliationStatus: "PENDING" }, { reconciliationStatus: null }],
     })
-      .populate("invoiceId")
-      .populate("clientId")
       .sort({ paymentDate: -1 })
       .limit(limit)
       .skip(skip)
@@ -209,5 +196,25 @@ export const getTDSReportDataRepo = async (companyId, startDate, endDate) => {
       500,
       "getTDSReportDataRepo"
     );
+  }
+};
+
+export const getDetailedTDSReportRepo = async (companyId, fromDate, toDate) => {
+  try {
+    const Payment = await getPaymentModel();
+    const query = {
+      companyId: new mongoose.Types.ObjectId(companyId),
+      tdsAmount: { $gt: 0 }
+    };
+    if (fromDate || toDate) {
+      query.paymentDate = {};
+      if (fromDate) query.paymentDate.$gte = new Date(fromDate);
+      if (toDate) query.paymentDate.$lte = new Date(toDate);
+    }
+
+    const payments = await Payment.find(query).sort({ paymentDate: -1 }).lean();
+    return payments;
+  } catch (error) {
+    throw new AppError(error.message || "Error retrieving detailed TDS report", 500, "getDetailedTDSReportRepo");
   }
 };

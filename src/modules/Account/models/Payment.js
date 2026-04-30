@@ -1,27 +1,53 @@
 import mongoose from "mongoose";
-import { connectAccountingDB } from "../../../config/db/accounting.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const paymentSchema = new mongoose.Schema(
   {
     invoiceId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Invoice",
+      type: String,
       required: [true, "Invoice ID is required"],
       indexed: true,
     },
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
+      type: String,
       required: [true, "Company ID is required"],
       indexed: true,
     },
     clientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Client",
+      type: String,
     },
     amountPaid: {
       type: Number,
       required: [true, "Amount paid is required"],
+    },
+    originalAmount: {
+      type: Number,
+      default: 0,
+    },
+    receivedAmount: {
+      type: Number,
+      default: 0,
+    },
+    adjustmentAmount: {
+      type: Number,
+      default: 0,
+    },
+    adjustmentType: {
+      type: String,
+      enum: [
+        "NONE",
+        "BANK_CHARGES",
+        "PAYMENT_GATEWAY_CHARGES",
+        "FOREX_LOSS",
+        "FOREX_GAIN",
+        "EXTRA_RECEIPT",
+      ],
+      default: "NONE",
+    },
+    adjustmentLedgerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
     },
     tdsAmount: {
       type: Number,
@@ -74,13 +100,15 @@ const paymentSchema = new mongoose.Schema(
       default: "NOT_RECONCILED",
     },
     createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
     },
+    isReconciled: {
+      type: Boolean,
+      default: false,
+    },
     updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
     },
   },
   {
@@ -88,11 +116,34 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
+// Auto-reconciliation hook
+paymentSchema.post("save", async function (doc) {
+  try {
+    if (doc.status === "COMPLETED" && doc.journalId) {
+      const { BankReconciliationService } = await import("../services/bankReconciliationService.js");
+      const { getBankLedgerTransactionModel } = await import("./BankLedgerTransaction.js");
+      const BankLedgerTransaction = await getBankLedgerTransactionModel();
+
+      const ledgerTransactions = await BankLedgerTransaction.find({
+        companyId: doc.companyId,
+        journalId: doc.journalId,
+        reconciliationStatus: { $ne: "MATCHED" },
+      }).lean();
+
+      for (const ledgerTx of ledgerTransactions) {
+        await BankReconciliationService.autoReconcile(ledgerTx._id);
+      }
+    }
+  } catch (error) {
+    console.error("Auto-reconciliation hook failed for Payment:", error.message);
+  }
+});
+
 paymentSchema.index({ companyId: 1, invoiceId: 1 });
 paymentSchema.index({ paymentDate: -1, status: 1 });
 paymentSchema.index({ clientId: 1, paymentDate: -1 });
 
 export const getPaymentModel = async () => {
-  const db = await connectAccountingDB();
+  const db = getDatabase("accounting");
   return db.models.Payment || db.model("Payment", paymentSchema);
 };

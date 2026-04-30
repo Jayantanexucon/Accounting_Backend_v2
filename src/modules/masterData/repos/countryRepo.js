@@ -14,7 +14,7 @@ export const createCountryRepo = async (data) => {
 export const findCountryByIdRepo = async (id) => {
   try {
     const Country = await getCountryModel();
-    return await Country.findById(id).populate("currency");
+    return await Country.findById(id);
   } catch (error) {
     throw new AppError(error.message, 500, "findCountryByIdRepo");
   }
@@ -23,7 +23,7 @@ export const findCountryByIdRepo = async (id) => {
 export const getAllCountriesRepo = async () => {
   try {
     const Country = await getCountryModel();
-    return await Country.find({ isActive: true }).populate("currency").sort({ createdAt: -1 });
+    return await Country.find({ isActive: true }).sort({ createdAt: -1 });
   } catch (error) {
     throw new AppError(error.message, 500, "getAllCountriesRepo");
   }
@@ -53,5 +53,14 @@ export const findCountryByCodeRepo = async (code) => {
     return await Country.findOne({ countryCode: code });
   } catch (error) {
     throw new AppError(error.message, 500, "findCountryByCodeRepo");
+  }
+};
+
+export const findCountryByNameRepo = async (countryName) => {
+  try {
+    const Country = await getCountryModel();
+    return await Country.findOne({ countryName });
+  } catch (error) {
+    throw new AppError(error.message, 500, "findCountryByNameRepo");
   }
 };

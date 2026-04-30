@@ -25,6 +25,10 @@ export const createClientRepo = async (clientData) => {
 export const findClientRepo = async (filter, lean = true) => {
   try {
     const Client = await getClientModel();
+    // Normalize companyId in filter to string
+    if (filter.companyId) {
+      filter.companyId = String(filter.companyId);
+    }
     const query = Client.findOne(filter);
     if (lean) query.lean();
     return await query;
@@ -57,16 +61,21 @@ export const updateClientRepo = async (id, updateData, lean = true) => {
   try {
     const Client = await getClientModel();
     const client = await Client.findById(id);
+    if (!client) {
+      throw new AppError("Client not found", 404, "updateClientRepo");
+    }
 
     const latestVersionNo = client.ref.length > 0 ? client.ref[client.ref.length - 1].versionNo + 1 : 1;
+    const mergedSnapshot = { ...client.toObject(), ...updateData };
 
     const newVersion = {
       versionNo: latestVersionNo,
-      snapshot: updateData,
+      snapshot: mergedSnapshot,
       status: "Pending",
     };
 
     client.ref.push(newVersion);
+    Object.assign(client, updateData);
 
     const saved = await client.save();
 
@@ -95,17 +104,41 @@ export const getLastClientCodeRepo = async (companyId) => {
   }
 };
 
-export const getPaginatedClientsRepo = async ({ companyId, page, limit }) => {
+export const getPaginatedClientsRepo = async ({ page, limit, search, status, country }) => {
   try {
     const Client = await getClientModel();
     const skip = (page - 1) * limit;
-    const query = { companyId };
+    // Always return all clients (global master data) - no companyId filter
+    const query = {};
+
+    if (status === "active") {
+      query.isActive = true;
+    } else if (status === "inactive") {
+      query.isActive = false;
+    }
+
+    if (country && country !== "all") {
+      query.clientCountry = country;
+    }
+
+    if (search) {
+      query.$or = [
+        { clientName: { $regex: search, $options: "i" } },
+        { clientCode: { $regex: search, $options: "i" } },
+        { gstNumber: { $regex: search, $options: "i" } },
+        { panNumber: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { contactPerson: { $regex: search, $options: "i" } },
+      ];
+    }
 
     const totalCount = await Client.countDocuments(query);
+
     const clients = await Client.find(query)
       .skip(skip)
       .limit(limit)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     return {
       clients,
@@ -114,6 +147,6 @@ export const getPaginatedClientsRepo = async ({ companyId, page, limit }) => {
       currentPage: page,
     };
   } catch (error) {
-    throw new AppError(error?.message || "Error getting paginated clients", 500, "getPaginatedClientsRepo");
+    throw new AppError(error?.message || "Error getting paginated clients", error?.statusCode || 500, "getPaginatedClientsRepo");
   }
 };

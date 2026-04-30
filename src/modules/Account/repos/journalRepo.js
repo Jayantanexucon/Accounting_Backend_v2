@@ -1,5 +1,52 @@
 import AppError from "../../../utils/AppError.js";
+import mongoose from "mongoose";
 import { getJournalModel } from "../models/Journal.js";
+import { getJournalLineModel } from "../models/JournalLine.js";
+import { getAccountModel } from "../models/Account.js";
+
+const attachLinesToJournals = async (journals = []) => {
+  if (!journals.length) return journals;
+
+  const JournalLine = await getJournalLineModel();
+  // Ensure Account model is registered on the DB connection before populate
+  await getAccountModel();
+  const journalIds = journals.map((journal) => journal._id);
+  const lines = await JournalLine.find({ journalId: { $in: journalIds } })
+    .populate({ path: "accountId", select: "name code" })
+    .sort({ lineNumber: 1, createdAt: 1 })
+    .lean();
+
+  const linesByJournalId = new Map();
+  for (const line of lines) {
+    const key = line.journalId?.toString();
+    if (!linesByJournalId.has(key)) {
+      linesByJournalId.set(key, []);
+    }
+    // Resolve account name/code: prefer denormalized fields, fallback to populated accountId
+    const populatedAccount = line.accountId && typeof line.accountId === "object" ? line.accountId : null;
+    const accountId = populatedAccount?._id || line.accountId;
+    const accountName = line.accountName || populatedAccount?.name || null;
+    const accountCode = line.accountCode || populatedAccount?.code || null;
+
+    linesByJournalId.get(key).push({
+      ...line,
+      accountId: accountId,
+      debit: Number(line.debitAmount || 0),
+      credit: Number(line.creditAmount || 0),
+      account: {
+        _id: accountId,
+        name: accountName,
+        code: accountCode,
+      },
+    });
+  }
+
+  return journals.map((journal) => ({
+    ...journal,
+    lines: linesByJournalId.get(journal._id.toString()) || [],
+  }));
+};
+
 
 export const createJournalRepo = async (journalData) => {
   try {
@@ -17,10 +64,19 @@ export const createJournalRepo = async (journalData) => {
 
 export const getJournalByIdRepo = async (id) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new AppError("Invalid journal ID", 400, "getJournalByIdRepo");
+    }
     const Journal = await getJournalModel();
     const journal = await Journal.findById(id).lean();
-    return journal;
+    if (!journal) return null;
+    if (!journal) return null;
+    const [journalWithLines] = await attachLinesToJournals([journal]);
+    return journalWithLines;
   } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
     throw new AppError(error.message || "Error finding journal", 500, "getJournalByIdRepo");
   }
 };
@@ -29,7 +85,7 @@ export const getJournalsRepo = async (filter = {}) => {
   try {
     const Journal = await getJournalModel();
     const journals = await Journal.find(filter).sort({ date: -1 }).lean();
-    return journals;
+    return await attachLinesToJournals(journals);
   } catch (error) {
     throw new AppError(error.message || "Error retrieving journals", 500, "getJournalsRepo");
   }
@@ -92,7 +148,7 @@ export const getJournalsByApprovalStatusRepo = async (companyId, status) => {
     })
       .sort({ createdAt: -1 })
       .lean();
-    return journals;
+    return await attachLinesToJournals(journals);
   } catch (error) {
     throw new AppError(
       error.message || "Error retrieving journals by approval status",

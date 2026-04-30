@@ -63,13 +63,8 @@ export const createHSNController = async (req, res, next) => {
 
 export const getAllHSNController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
-
-    if (!companyId) {
-      throw new AppError("Company ID is required", 400, "getAllHSNController");
-    }
-
-    const list = await getAllHSNRepo(companyId);
+    // Always return all HSN codes (global master data) - companyId filter removed
+    const list = await getAllHSNRepo();
 
     return res.status(200).json(
       new ApiResponse({
@@ -85,9 +80,11 @@ export const getAllHSNController = async (req, res, next) => {
 
 export const getHSNController = async (req, res, next) => {
   try {
-    const { companyId, hsnId } = req.params;
+    const { hsnId } = req.params;
 
-    const hsn = await findHSNByIdRepo(hsnId, companyId);
+    // Search all HSN codes (global master data) - no companyId filter
+    const hsn = await findHSNByIdRepo(hsnId);
+
     if (!hsn) {
       throw new AppError("HSN not found", 404, "getHSNController");
     }
@@ -106,7 +103,8 @@ export const getHSNController = async (req, res, next) => {
 
 export const updateHSNController = async (req, res, next) => {
   try {
-    const { companyId, hsnId } = req.params;
+    const { companyId } = req.params;
+    const hsnId = req.params.hsnId || req.params.id;
     const data = req.body;
     const userId = req.user?._id;
 
@@ -115,7 +113,7 @@ export const updateHSNController = async (req, res, next) => {
       throw new AppError("HSN not found", 404, "updateHSNController");
     }
 
-    const updated = await updateHSNRepo(hsnId, companyId, { ...data, updatedBy: userId });
+    const updated = await updateHSNRepo(hsnId, { ...data, updatedBy: userId });
 
     await createAuditLog({
       companyId,
@@ -158,7 +156,8 @@ export const updateHSNController = async (req, res, next) => {
 
 export const deleteHSNController = async (req, res, next) => {
   try {
-    const { companyId, hsnId } = req.params;
+    const { companyId } = req.params;
+    const hsnId = req.params.hsnId || req.params.id;
     const userId = req.user?._id;
 
     const hsn = await findHSNByIdRepo(hsnId, companyId);
@@ -166,7 +165,7 @@ export const deleteHSNController = async (req, res, next) => {
       throw new AppError("HSN not found", 404, "deleteHSNController");
     }
 
-    await deleteHSNRepo(hsnId, companyId);
+    await deleteHSNRepo(hsnId);
 
     await createAuditLog({
       companyId,

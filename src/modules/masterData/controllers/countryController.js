@@ -2,20 +2,56 @@ import { createCountryRepo, findCountryByIdRepo, getAllCountriesRepo, updateCoun
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeCountryPayload } from "../utils/entityMasterData.js";
+
+// Helper to extract and validate inline currency object
+const resolveCurrencyInline = (payload) => {
+  // If currency is already an object with required fields, use it directly
+  if (payload.currency && typeof payload.currency === "object" && payload.currency.currencyCode) {
+    return {
+      currencyName: payload.currency.currencyName?.trim() || payload.currency.currencyCode,
+      currencyCode: payload.currency.currencyCode?.trim()?.toUpperCase(),
+      currencySymbol: payload.currency.currencySymbol?.trim() || "",
+    };
+  }
+
+  // If currency is a string (legacy support), return null to use default
+  if (typeof payload.currency === "string") {
+    return null;
+  }
+
+  return null;
+};
 
 export const createCountryController = async (req, res, next) => {
   try {
-    const { countryName, countryCode, dialCode, currency } = req.body;
+    const normalizedPayload = normalizeCountryPayload(req.body);
+    const { countryName, countryCode } = normalizedPayload;
     const userId = req.user?._id;
 
     if (!countryName || !countryCode) {
       throw new AppError("Country name and code are required", 400, "createCountryController");
     }
 
+    // Extract inline currency or use default based on country code
+    let currency = resolveCurrencyInline(normalizedPayload);
+    
+    // If no currency provided, use default based on country code
+    if (!currency) {
+      const defaults = {
+        IN: { currencyName: "Indian Rupee", currencyCode: "INR", currencySymbol: "₹" },
+        US: { currencyName: "US Dollar", currencyCode: "USD", currencySymbol: "$" },
+        GB: { currencyName: "British Pound", currencyCode: "GBP", currencySymbol: "£" },
+      };
+      currency = defaults[countryCode.toUpperCase()] || { 
+        currencyName: countryName, 
+        currencyCode: countryCode.toUpperCase(), 
+        currencySymbol: "" 
+      };
+    }
+
     const country = await createCountryRepo({
-      countryName,
-      countryCode,
-      dialCode,
+      ...normalizedPayload,
       currency,
       createdBy: userId,
       updatedBy: userId,
@@ -86,7 +122,7 @@ export const getCountryByIdController = async (req, res, next) => {
 export const updateCountryController = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const updateData = req.body;
+    const updateData = normalizeCountryPayload(req.body);
     const userId = req.user?._id;
 
     const oldCountry = await findCountryByIdRepo(countryId);
@@ -94,8 +130,12 @@ export const updateCountryController = async (req, res, next) => {
       throw new AppError("Country not found", 404, "updateCountryController");
     }
 
+    // Extract inline currency or keep existing
+    const currency = resolveCurrencyInline(updateData) || oldCountry.currency;
+
     const country = await updateCountryRepo(countryId, {
       ...updateData,
+      currency,
       updatedBy: userId,
     });
 

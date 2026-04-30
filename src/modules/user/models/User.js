@@ -1,14 +1,14 @@
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
-import { connectUserDB } from "../../../config/db/user.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const permissionsSchema = new Schema(
   {
-    entityId: { type: String, required: true }, // Reference to Entity from master DB
-    actions: [{ type: String, enum: ["CREATE", "EDIT", "VIEW", "DELETE"] }],
-    companyId: { type: String, required: true }, // Reference to Company from company DB
+    entity: { type: String, required: true }, // Reference to Entity ID from master DB
+    actions: [{ type: String, enum: ["CREATE", "EDIT", "VIEW", "DELETE"], required: true }],
+    company: { type: String, required: true }, // Reference to Company ID from company DB
   },
-  { _id: false }
+  { _id: true } // Add _id for better tracking
 );
 
 const userSchema = new Schema(
@@ -45,17 +45,16 @@ const userSchema = new Schema(
   { timestamps: true }
 );
 
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
   this.password = await bcrypt.hash(this.password, 10);
-  next();
 });
 
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-export const getUserModel = async () => {
-  const db = await connectUserDB();
+export const getUserModel = async () => {     
+  const db = getDatabase("user");
   return db.models.User || db.model("User", userSchema);
-};
+};    

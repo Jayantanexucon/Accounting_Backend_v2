@@ -17,59 +17,59 @@ const router = express.Router();
 // All routes require authentication
 router.use(protect);
 
-// POST /api/client/create - Create client
+// POST /api/client/create/:companyId - Create client
 router.post(
-  "/create",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "CREATE" }),
+  "/create/:companyId",
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "CREATE" }),
   createClientController
 );
 
 // GET /api/client/paginated - Get paginated clients
 router.get(
   "/paginated",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientsPaginatedController
 );
 
-// GET /api/client/pending/:companyId - Get pending client requests
+// GET /api/client/pending - Get all pending client requests (global master data)
 router.get(
-  "/pending/:companyId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  "/pending",
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getPendingClientRequestsController
 );
 
 // PUT /api/client/status/:clientId - Update client status
 router.put(
   "/status/:clientId",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "EDIT" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "EDIT" }),
   clientStatusController
 );
 
 // GET /api/client - Get all clients
 router.get(
   "/",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientsController
 );
 
 // GET /api/client/:id - Get client by ID
 router.get(
-  "/:id",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "VIEW" }),
+  "/:clientId",
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "VIEW" }),
   getClientByIdController
 );
 
 // PUT /api/client/:id - Update client
 router.put(
-  "/:id",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "EDIT" }),
+  "/:clientId",
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "EDIT" }),
   updateClientController
 );
 
 // DELETE /api/client/:id - Delete client
 router.delete(
-  "/:id",
-  accessControlMiddleware({ entityKey: "CLIENT", action: "DELETE" }),
+  "/:clientId",
+  accessControlMiddleware({ entityKey: "CLIENTS", action: "DELETE" }),
   deleteClientController
 );
 

@@ -1,5 +1,77 @@
 import AppError from "../../../utils/AppError.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
+import {
+  buildTaxMeta,
+  normalizeLineItemTax,
+  round2,
+} from "../utils/taxNormalization.js";
+
+// Helper: Recalculate totalAmount for items if missing (data stored before fix)
+const recalculateItemTotals = (po) => {
+  if (!Array.isArray(po.items)) return po;
+
+  let recalculated = false;
+  const items = po.items.map((item, index) => {
+    // ── Assign stable itemId if missing ─────────────────────────
+    if (!item.itemId && !item._id) {
+       item.itemId = `po-item-${index}`;
+       recalculated = true;
+    }
+
+    // ── Recalculate totals ──────────────────────────────────────
+    const normalizedTax = normalizeLineItemTax(item, {
+      taxType: po.taxType,
+      taxLabel: po.taxLabel,
+    });
+    const computedTotalAmount =
+      Number(item.totalAmount || 0) ||
+      round2(Number(item.taxableValue || 0) + Number(normalizedTax.taxAmount || 0));
+
+    if (item.taxType !== normalizedTax.taxType ||
+        item.taxLabel !== normalizedTax.taxLabel ||
+        Number(item.taxRate ?? item.gstRate ?? 0) !== normalizedTax.taxRate ||
+        Number(item.taxAmount ?? item.gstAmount ?? 0) !== normalizedTax.taxAmount ||
+        Number(item.combinedTaxRate || 0) !== normalizedTax.combinedTaxRate ||
+        JSON.stringify(item.taxBreakdown || []) !== JSON.stringify(normalizedTax.taxBreakdown || [])) {
+      Object.assign(item, normalizedTax);
+      recalculated = true;
+    }
+
+    if ((item.totalAmount === 0 || !item.totalAmount) && (item.taxableValue || normalizedTax.taxAmount)) {
+      item.totalAmount = computedTotalAmount;
+      recalculated = true;
+    }
+    return item;
+  });
+
+  // Recalculate PO-level totals if items were recalculated
+  if (recalculated) {
+    const totalTaxableValue = items.reduce((sum, item) => sum + Number(item.taxableValue || 0), 0);
+    const totalAmount = items.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
+    const taxMeta = buildTaxMeta({
+      taxType: po.taxType,
+      taxLabel: po.taxLabel,
+      taxSummary: po.taxSummary,
+      totalTaxAmount: po.totalTaxAmount,
+      items,
+    });
+
+    po.items = items;
+    po.totalTaxableValue = round2(totalTaxableValue);
+    po.taxType = taxMeta.taxType;
+    po.taxLabel = taxMeta.taxLabel;
+    po.taxSummary = taxMeta.taxSummary;
+    po.totalTaxAmount = taxMeta.totalTaxAmount;
+    po.totalGSTAmount = taxMeta.totalGSTAmount;
+    po.totalCGSTAmount = taxMeta.totalCGSTAmount;
+    po.totalSGSTAmount = taxMeta.totalSGSTAmount;
+    po.totalIGSTAmount = taxMeta.totalIGSTAmount;
+    po.totalAmount = round2(totalAmount);
+  }
+
+  return po;
+};
+
 
 export const createPurchaseOrderRepo = async (poData) => {
   try {
@@ -21,14 +93,16 @@ export const createPurchaseOrderRepo = async (poData) => {
 export const getPurchaseOrderByIdRepo = async (id) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findById(id)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .lean();
+    let po = await PurchaseOrder.findById(id).lean();
 
     if (!po) {
       throw new AppError("Purchase Order not found", 404, "getPurchaseOrderByIdRepo");
     }
+    
+    // Recalculate missing totals for old data
+    po = recalculateItemTotals(po);
+    
+    if (po) po.client = po.vendor;
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;
@@ -41,13 +115,18 @@ export const getPurchaseOrdersRepo = async (filter = {}, options = {}) => {
     const PurchaseOrder = await getPurchaseOrderModel();
     const { sort = { poDate: -1 }, limit = 0, skip = 0 } = options;
 
-    const pos = await PurchaseOrder.find(filter)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
+    let pos = await PurchaseOrder.find(filter)
       .sort(sort)
       .limit(limit)
       .skip(skip)
       .lean();
+
+    // Recalculate missing totals for old data
+    pos = pos.map(po => {
+      po = recalculateItemTotals(po);
+      po.client = po.vendor;
+      return po;
+    });
 
     return pos;
   } catch (error) {
@@ -58,11 +137,15 @@ export const getPurchaseOrdersRepo = async (filter = {}, options = {}) => {
 export const getPurchaseOrderByNumberRepo = async (poNumber, companyId) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findOne({ poNumber, companyId }).lean();
+    let po = await PurchaseOrder.findOne({ poNumber, companyId }).lean();
 
     if (!po) {
       throw new AppError("Purchase Order not found with this number", 404, "getPurchaseOrderByNumberRepo");
     }
+    
+    // Recalculate missing totals for old data
+    po = recalculateItemTotals(po);
+    
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;
@@ -73,13 +156,12 @@ export const getPurchaseOrderByNumberRepo = async (poNumber, companyId) => {
 export const updatePurchaseOrderRepo = async (id, updateData) => {
   try {
     const PurchaseOrder = await getPurchaseOrderModel();
-    const po = await PurchaseOrder.findByIdAndUpdate(id, updateData, { new: true })
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email");
+    const po = await PurchaseOrder.findByIdAndUpdate(id, updateData, { new: true });
 
     if (!po) {
       throw new AppError("Purchase Order not found", 404, "updatePurchaseOrderRepo");
     }
+    if (po) po.client = po.vendor;
     return po;
   } catch (error) {
     if (error.statusCode === 404) throw error;
@@ -112,13 +194,12 @@ export const getPOsByStatusRepo = async (companyId, status, options = {}) => {
     const { sort = { poDate: -1 }, limit = 0, skip = 0 } = options;
 
     const pos = await PurchaseOrder.find({ companyId, status })
-      .populate("createdBy", "name email")
       .sort(sort)
       .limit(limit)
       .skip(skip)
       .lean();
 
-    return pos;
+    return pos.map(po => ({ ...po, client: po.vendor }));
   } catch (error) {
     throw new AppError(error.message || "Error retrieving POs by status", 500, "getPOsByStatusRepo");
   }

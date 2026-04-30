@@ -25,6 +25,7 @@ export const SCHEDULE_III_CONFIG = {
         "Trade Receivables",
         "Cash and Cash Equivalents",
         "Short-Term Loans and Advances",
+        "Other Assets",
         "Other Current Assets",
       ],
     },
@@ -43,6 +44,7 @@ export const SCHEDULE_III_CONFIG = {
       "Current Liabilities": [
         "Short-Term Borrowings",
         "Trade Payables",
+        "Other Liabilities",
         "Other Current Liabilities",
         "Short-Term Provisions",
       ],
@@ -150,6 +152,83 @@ export const getDefaultScheduleLineItemForGroupName = (groupName = "", nature = 
   return null;
 };
 
+export const SCHEDULE_III_FALLBACK_LINE_ITEMS = {
+  Asset: "Other Assets",
+  Liability: "Other Liabilities",
+  Equity: "Reserves and Surplus",
+  Income: "Other Income",
+  Expense: "Other Expenses",
+};
+
+export const getExpectedScheduleSectionForNature = (nature) => {
+  const config = SCHEDULE_III_CONFIG[nature];
+  if (!config) return null;
+
+  return {
+    scheduleMainHead: config.scheduleMainHead,
+    reportType: config.accountType === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+  };
+};
+
+export const getScheduleMappingForLineItem = (nature, lineItem) => {
+  const config = SCHEDULE_III_CONFIG[nature];
+  if (!config || !lineItem) return null;
+
+  for (const [scheduleGroup, lineItems] of Object.entries(config.groups)) {
+    if (lineItems.includes(lineItem)) {
+      return {
+        scheduleMainHead: config.scheduleMainHead,
+        scheduleGroup,
+        scheduleLineItem: lineItem,
+        reportType: config.accountType === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+      };
+    }
+  }
+
+  return null;
+};
+
+export const getFallbackScheduleMappingForNature = (nature) =>
+  getScheduleMappingForLineItem(nature, SCHEDULE_III_FALLBACK_LINE_ITEMS[nature]);
+
+export const enforceScheduleMappingForNature = (nature, mapping = {}) => {
+  const config = SCHEDULE_III_CONFIG[nature];
+  if (!config) {
+    throw new AppError("Invalid group nature", 400, "enforceScheduleMappingForNature");
+  }
+
+  const existingLineItem = mapping?.scheduleLineItem || mapping?.lineItemName || mapping?.lineItemCode;
+  const validExistingMapping = getScheduleMappingForLineItem(nature, existingLineItem);
+  const fallbackMapping = getFallbackScheduleMappingForNature(nature);
+  const enforced = validExistingMapping || fallbackMapping;
+
+  return {
+    scheduleMainHead: config.scheduleMainHead,
+    scheduleGroup: enforced.scheduleGroup,
+    scheduleLineItem: enforced.scheduleLineItem,
+    noteNo: mapping?.noteNo || null,
+    reportType: config.accountType === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+  };
+};
+
+export const getAutoScheduleMappingForLedger = (ledgerName = "", group = {}) => {
+  const nature = group?.nature;
+  const config = SCHEDULE_III_CONFIG[nature];
+  if (!config) {
+    throw new AppError("Valid group nature is required for schedule mapping", 400, "getAutoScheduleMappingForLedger");
+  }
+
+  const matchedLineItem =
+    getDefaultScheduleLineItemForGroupName(`${ledgerName} ${group?.name || ""}`, nature) ||
+    group.scheduleLineItem ||
+    SCHEDULE_III_FALLBACK_LINE_ITEMS[nature];
+
+  return enforceScheduleMappingForNature(nature, {
+    scheduleLineItem: matchedLineItem,
+    noteNo: group.noteNo || null,
+  });
+};
+
 /**
  * Find the schedule group (e.g. "Current Assets", "Non-Current Liabilities") for a line item
  * @param {string} nature - The nature of the account
@@ -248,6 +327,45 @@ export const validateGroupScheduleMapping = ({
   }
 
   return true;
+};
+
+export const deriveLedgerPropertiesFromGroup = (group) => {
+  if (!group?.nature) {
+    throw new AppError("Group nature is required for ledger classification", 400, "deriveLedgerPropertiesFromGroup");
+  }
+
+  validateGroupScheduleMapping({
+    nature: group.nature,
+    balanceType: group.balanceType,
+    scheduleMainHead: group.scheduleMainHead,
+    scheduleGroup: group.scheduleGroup,
+    scheduleLineItem: group.scheduleLineItem,
+  });
+
+  const config = SCHEDULE_III_CONFIG[group.nature];
+  const isBalanceSheet = config.accountType === "balanceSheet";
+
+  let subType;
+  if (isBalanceSheet) {
+    subType = /non-current/i.test(group.scheduleGroup) ? "nonCurrent" : "current";
+    if (group.nature === "Equity") {
+      subType = "nonCurrent";
+    }
+  }
+
+  return {
+    type: config.accountType,
+    openingType: config.balanceType.toLowerCase(),
+    subType: isBalanceSheet ? subType : undefined,
+    scheduleMapping: {
+      reportType: config.accountType === "balanceSheet" ? "balance_sheet" : "profit_and_loss",
+      primaryHead: group.scheduleMainHead,
+      subHead: group.scheduleGroup,
+      lineItemCode: group.scheduleLineItem,
+      lineItemName: group.scheduleLineItem,
+      noteNo: group.noteNo || null,
+    },
+  };
 };
 
 export default SCHEDULE_III_CONFIG;

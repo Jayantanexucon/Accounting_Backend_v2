@@ -10,6 +10,7 @@ import {
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { normalizeEntityPayload } from "../utils/entityMasterData.js";
 
 // Generate vendorCode
 const generateVendorCode = () => {
@@ -19,7 +20,7 @@ const generateVendorCode = () => {
 export const addVendorController = async (req, res, next) => {
   try {
     const { companyId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "vendor");
     const files = req.files;
     const userId = req.user?._id;
 
@@ -76,12 +77,11 @@ export const addVendorController = async (req, res, next) => {
 
 export const getPaginatedVendorsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
+    // Always return all vendors (global master data) - companyId filter removed
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 
     const result = await getPaginatedVendorsRepo({
-      companyId,
       page,
       limit,
     });
@@ -104,7 +104,7 @@ export const getPaginatedVendorsController = async (req, res, next) => {
 export const updateVendorController = async (req, res, next) => {
   try {
     const { vendorId } = req.params;
-    const data = req.body;
+    const data = await normalizeEntityPayload(req.body, "vendor");
     const files = req.files;
     const userId = req.user?._id;
 
@@ -241,14 +241,14 @@ export const getVendorByIdController = async (req, res, next) => {
 
 export const searchVendorsController = async (req, res, next) => {
   try {
-    const { companyId } = req.params;
+    // Always search all vendors (global master data) - companyId filter removed
     const { searchTerm } = req.query;
     const filters = {
       status: req.query.status,
       serviceType: req.query.serviceType,
     };
 
-    const vendors = await searchVendorsRepo(companyId, searchTerm, filters);
+    const vendors = await searchVendorsRepo(searchTerm, filters);
 
     return new ApiResponse({
       message: "Vendors searched successfully",

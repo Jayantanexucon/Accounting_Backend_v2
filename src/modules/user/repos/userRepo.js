@@ -28,7 +28,11 @@ export const findUserRepo = async (filter) => {
 export const findUserByIdRepo = async (userId) => {
   try {
     const User = await getUserModel();
-    return await User.findById(userId).select("-password");
+    const user = await User.findById(userId).select("-password");
+    
+    // Optionally populate entity information if needed
+    // This can be done based on your requirements
+    return user;
   } catch (error) {
     throw new AppError(
       error?.message || "Error finding user by ID",

@@ -12,12 +12,12 @@ const router = express.Router();
 
 router.use(protect);
 
-router.post("/", accessControlMiddleware({ entityKey: "AccountType", action: "CREATE" }), createAccountType);
+router.post("/", accessControlMiddleware({ entityKey: "ACCOUNT_TYPE", action: "CREATE" }), createAccountType);
 
-router.get("/", getAllAccountTypes);
+router.get("/", accessControlMiddleware({ entityKey: "ACCOUNT_TYPE", action: "VIEW" }), getAllAccountTypes);
 
-router.get("/:group", getAccountTypeByGroup);
+router.get("/:group", accessControlMiddleware({ entityKey: "ACCOUNT_TYPE", action: "VIEW" }), getAccountTypeByGroup);
 
-router.put("/:group", accessControlMiddleware({ entityKey: "AccountType", action: "UPDATE" }), updateAccountType);
+router.put("/:group", accessControlMiddleware({ entityKey: "ACCOUNT_TYPE", action: "EDIT" }), updateAccountType);
 
 export default router;

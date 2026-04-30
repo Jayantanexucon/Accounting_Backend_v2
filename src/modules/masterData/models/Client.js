@@ -1,8 +1,14 @@
 import mongoose from "mongoose";
-import { connectMasterDB } from "../../../config/db/master.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
 const addressSchema = new mongoose.Schema(
   {
+    type: {
+      type: String,
+      enum: ["DEFAULT", "SHIP_TO", "BILL_TO", "BRANCH", "OTHER"],
+      default: "DEFAULT",
+    },
+    label: { type: String, trim: true, default: "" },
     line1: { type: String, trim: true, default: "" },
     line2: { type: String, trim: true, default: "" },
     city: { type: String, trim: true, default: "" },
@@ -11,10 +17,26 @@ const addressSchema = new mongoose.Schema(
     pinCode: { type: String, trim: true, default: "" },
     stateCode: { type: String, trim: true, default: "" },
     gstStateCode: { type: String, trim: true, default: "" },
+    taxType: { type: String, trim: true, default: "" },
+    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
+    countryId: { type: mongoose.Schema.Types.ObjectId, ref: "Country", default: null },
+    stateId: { type: mongoose.Schema.Types.ObjectId, ref: "State", default: null },
+    isDefault: { type: Boolean, default: false },
+    isShipTo: { type: Boolean, default: false },
+  },
+  { _id: true }
+);
+
+const taxDetailSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, trim: true, default: "" },
+    taxNumber: { type: String, trim: true, uppercase: true, default: "" },
+    label: { type: String, trim: true, default: "" },
   },
   { _id: false }
 );
 
+// ─── Sub-schema: version / audit history ─────────────────────────────────────
 const versionSchema = new mongoose.Schema(
   {
     versionNo: { type: Number, default: 0 },
@@ -23,67 +45,206 @@ const versionSchema = new mongoose.Schema(
     statusDate: { type: Date },
     changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
-  { _id: false }
+  { _id: false }   // ← correct: options object belongs HERE, not as array item
 );
 
-const ClientSchema = new mongoose.Schema(
+// ─── Main Client Schema ───────────────────────────────────────────────────────
+const clientSchema = new mongoose.Schema(
   {
+    // ── Identity ──────────────────────────────────────────────────────────────
     companyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
-      required: true,
+      type: String,
+      // ref: "Company",
+      required: [true, "Company ID is required"],
       index: true,
     },
     clientCode: {
       type: String,
-      required: true,
-      unique: true,
       trim: true,
+      // ⚠ No unique:true here — uniqueness enforced by compound index below
+      //   to allow CL001 to exist in multiple companies simultaneously
     },
     clientName: {
       type: String,
-      required: true,
+      required: [true, "Client name is required"],
       trim: true,
     },
-    ref: [versionSchema],
     clientType: {
       type: String,
       enum: ["Company", "Individual", "Government", "Export", "SEZ", "Other"],
       default: "Company",
     },
-    address: addressSchema,
-    gstin: { type: String, trim: true, default: "" },
-    pan: { type: String, trim: true, default: "" },
+
+    // ── Status & Soft-delete ──────────────────────────────────────────────────
+    isActive: { type: Boolean, default: true },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+    // ── Contact ───────────────────────────────────────────────────────────────
+    contactPerson: { type: String, trim: true, default: "" },
+    contactNumber: { type: String, trim: true, default: "" },
+    altContactNumber: { type: String, trim: true, default: "" },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          if (!v) return true;
+          return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+        },
+        message: "Invalid email address",
+      },
+    },
+    website: { type: String, trim: true, default: "" },
+
+    // ── Primary / Registered Address ──────────────────────────────────────────
+    clientAddress: { type: String, trim: true, default: "" },
+    clientCity: { type: String, trim: true, default: "" },
+    clientState: { type: String, trim: true, default: "" },
+    clientCountry: { type: String, trim: true, default: "India" },
+    pinCode: { type: String, trim: true, default: "" },
+    stateCode: { type: String, trim: true, default: "" },
+    gstStateCode: { type: String, trim: true, default: "" },  // ← was missing
+
+    sameAsBilling: { type: Boolean, default: true },
+    addresses: { type: [addressSchema], default: [] },
+    defaultAddress: { type: addressSchema, default: () => ({}) },
+    additionalAddresses: { type: [addressSchema], default: [] },
+
+    // ── GST / Place of Supply (India) ─────────────────────────────────────────
+    placeOfSupply: { type: String, trim: true, default: "" },
     gstType: {
       type: String,
-      enum: ["Regular", "Composition", "Unregistered", "Consumer", "SEZ", "Overseas"],
-      default: "Regular",
+      enum: ["Regular", "Composition", "Unregistered", "Consumer", "SEZ", "Overseas", ""],
+      default: "",
     },
-    taxIdentifier: { type: String, trim: true, default: "" },
+
+    // ── Tax Identifiers — India ───────────────────────────────────────────────
+    panNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+      validate: {
+        // Must use regular function — arrow function breaks `this` binding
+        validator: function (v) {
+          if (this.clientCountry !== "India") return true; // skip non-India
+          if (!v) return true;                              // allow empty (presence validated in pre-save if needed)
+          return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(v);
+        },
+        message: "PAN number must be in format: ABCDE1234F",
+      },
+    },
+    gstNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          if (this.clientCountry !== "India") return true;
+          if (!v) return true;
+          return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(v);
+        },
+        message: "GST number must be in valid GSTIN format (e.g. 22AAAAA0000A1Z5)",
+      },
+    },
+
+    // ── Tax Identifiers — USA ─────────────────────────────────────────────────
+    einNumber: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          if (this.clientCountry !== "USA") return true;
+          if (!v) return true;
+          return /^\d{2}-\d{7}$/.test(v);
+        },
+        message: "EIN must be in format: 12-3456789",
+      },
+    },
+    ssnNumber: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          if (this.clientCountry !== "USA") return true;
+          if (!v) return true;
+          return /^\d{3}-\d{2}-\d{4}$/.test(v);
+        },
+        message: "SSN must be in format: 123-45-6789",
+      },
+    },
+
+    // ── Tax Identifiers — Generic (UK, EU, AU, SG, CA …) ─────────────────────
+    vatNumber: { type: String, trim: true, uppercase: true, default: "" },
+    companyNumber: { type: String, trim: true, default: "" },
+    nationalIdNumber: { type: String, trim: true, default: "" },
+
     taxIdentifierType: {
       type: String,
-      enum: ["PAN", "GST", "VAT", "EIN", "SSN", "CompanyNumber", "NationalID", "TIN", "ABN", "ACN", "UEN", "BN", "GST_HST", "CorporateNumber", "SIREN", "Steuernummer", "TRN"],
-      default: "PAN",
+      enum: [
+        "PAN", "GST", "VAT", "EIN", "SSN",
+        "CompanyNumber", "NationalID", "TIN",
+        "ABN", "ACN", "UEN", "BN", "GST_HST",
+        "CorporateNumber", "SIREN", "Steuernummer", "TRN", ""
+      ],
+      default: "",
     },
-    contactPerson: { type: String, trim: true, default: "" },
-    contactPhone: { type: String, trim: true, default: "" },
-    email: { type: String, trim: true, default: "" },
+    taxIdentificationNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+    taxDetails: {
+      type: [taxDetailSchema],
+      default: [],
+    },
+
+    // ── TDS Configuration (India) ─────────────────────────────────────────────
+    tdsApplicable: { type: Boolean, default: false },
+    tdsRate: { type: Number, default: 0, min: 0, max: 100 },
+    tdsSection: { type: String, trim: true, default: "" },
+
+    // ── Accounting / Financial ────────────────────────────────────────────────
     paymentTerms: {
       type: String,
-      enum: ["P1", "P2", "P3", "P4", "P5", "P6", "P7"],
-      default: "P1",
+      trim: true,
+      enum: ["P1", "P2", "P3", "P4", "P5", "P6", "P7", ""],
+      default: "",
     },
-    creditLimit: { type: Number, default: 0 },
-    notes: { type: String, default: "" },
-    deletedAt: { type: Date, default: null },
-    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    currency: { type: String, trim: true, default: "INR" },  // ISO 4217
+    currencySymbol: { type: String, trim: true, default: "₹" },
+    currencyName: { type: String, trim: true, default: "Indian Rupee" },
+    creditLimit: { type: Number, default: 0, min: 0 },          // 0 = unlimited
+    openingBalance: { type: Number, default: 0 },                  // +ve receivable / -ve payable
+    openingBalanceDate: { type: Date, default: null },
+
+    // ── HSN Codes & PO Numbers ────────────────────────────────────────────────
+    hsnCodes: [{ type: String, trim: true }],  // ← was missing
+    poList: [{ type: String, trim: true }],  // ← was missing
+
+    // ── Audit / Version History ───────────────────────────────────────────────
+    ref: {
+      type: [versionSchema],
+      default: [],
+    },
+
+    // ── Notes ─────────────────────────────────────────────────────────────────
+    remarks: { type: String, trim: true, default: "" },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    versionKey: false,
+  }
 );
 
 export const getClientModel = async () => {
-  const db = await connectMasterDB();
-  return db.models.Client || db.model("Client", ClientSchema);
+  const db = getDatabase("master");
+  return db.models.Client || db.model("Client", clientSchema);
 };

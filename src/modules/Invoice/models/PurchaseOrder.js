@@ -1,71 +1,127 @@
 import mongoose from "mongoose";
-import { connectInvoiceDB } from "../../../config/db/invoice.db.js";
+import { getDatabase } from "../../../config/databases.js";
 
-const poLineItemSchema = new mongoose.Schema({
-  itemId: { type: String },
-  description: { type: String, required: true },
-  hsnSac: { type: String },
-  quantity: { type: Number, required: true, min: 0 },
-  rate: { type: Number, required: true, min: 0 },
-  taxableValue: { type: Number, required: true, min: 0 },
-  gstRate: { type: Number, default: 0, min: 0 },
-  gstAmount: { type: Number, default: 0, min: 0 },
-  totalAmount: { type: Number, required: true, min: 0 },
-  invoicedQuantity: { type: Number, default: 0, min: 0 },
-  invoicedAmount: { type: Number, default: 0, min: 0 },
-});
-
-const addressSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  address: { type: String },
-  stateCode: { type: String },
-  gstin: { type: String },
-});
-
-// Milestone schema for project-based POs
-const poMilestoneSchema = new mongoose.Schema({
-  milestoneNo: { type: Number, required: true },
-  title: { type: String, required: true },
-  description: { type: String },
-  targetDate: { type: Date },
-  deliveryDate: { type: Date },
-  amount: { type: Number, required: true, min: 0 },
-  invoicedAmount: { type: Number, default: 0, min: 0 },
-  status: {
-    type: String,
-    enum: ["Pending", "In Progress", "Completed", "Verified"],
-    default: "Pending",
+// ─── Line Item Schema ────────────────────────────────────────────
+// hsnId stored as plain String — HSN lives in a different database,
+// so we cannot use ObjectId ref across DB connections.
+// The full hsnSac code and gstRate are stored directly on the item.
+const taxBreakdownSchema = new mongoose.Schema(
+  {
+    taxType: { type: String, default: "GST" },
+    label: { type: String, default: "GST" },
+    rate: { type: Number, default: 0, min: 0 },
+    amount: { type: Number, default: 0, min: 0 },
   },
-  remarks: { type: String },
-});
+  { _id: false }
+);
 
-// Resource schema for staffing POs
-const resourceSchema = new mongoose.Schema({
-  resourceId: { type: mongoose.Schema.Types.ObjectId, ref: "Resource" },
-  resourceName: { type: String, required: true },
-  designation: { type: String },
-  startDate: { type: Date, required: true },
-  endDate: { type: Date },
-  dailyRate: { type: Number, required: true, min: 0 },
-  billableHoursPerDay: { type: Number, default: 8, min: 0 },
-  status: {
-    type: String,
-    enum: ["Active", "On Leave", "Inactive"],
-    default: "Active",
+const poLineItemSchema = new mongoose.Schema(
+  {
+    itemId: { type: String },
+    description: { type: String, required: true },
+    hsnSac: { type: String },   // HSN/SAC code string e.g. "998314"
+    hsnId: { type: String },   // ID from HSN module — stored as String, no ref
+    quantity: { type: Number, required: true, min: 0 },
+    unit: { 
+      type: String, 
+      enum: ["each", "hour"],
+      default: "each"
+    },   // Unit of measurement — can be "each" or "hour"
+    rate: { type: Number, required: true, min: 0 },
+    taxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxRate: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
+    combinedTaxRate: { type: Number, default: 0, min: 0 },
+    taxBreakdown: { type: [taxBreakdownSchema], default: [] },
+    gstRate: { type: Number, default: 0, min: 0 },
+    gstAmount: { type: Number, default: 0, min: 0 },
+    cgstAmount: { type: Number, default: 0, min: 0 },
+    sgstAmount: { type: Number, default: 0, min: 0 },
+    igstAmount: { type: Number, default: 0, min: 0 },
+    totalAmount: { type: Number, required: true, min: 0 },
+    invoicedQuantity: { type: Number, default: 0, min: 0 },
+    invoicedAmount: { type: Number, default: 0, min: 0 },
+  }
+);
+
+// ─── Address Schema ──────────────────────────────────────────────
+// Stored inline — client lives in a different DB so no ObjectId ref.
+// We store _id as a plain String for lookup purposes only.
+const addressSchema = new mongoose.Schema(
+  {
+    _id: { type: String },
+    name: { type: String, required: true },
+    address: { type: String },
+    stateCode: { type: String },
+    GSTIN: { type: String },
+    gstin: { type: String },
   },
-});
+  { _id: false }
+);
 
-// Attendance record schema for resource tracking
-const attendanceRecordSchema = new mongoose.Schema({
-  resourceId: { type: mongoose.Schema.Types.ObjectId, ref: "Resource" },
-  date: { type: Date, required: true },
-  hoursWorked: { type: Number, required: true, min: 0 },
-  description: { type: String },
-  approved: { type: Boolean, default: false },
-  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  approvalDate: { type: Date },
-});
+// ─── Milestone Schema ────────────────────────────────────────────
+const poMilestoneSchema = new mongoose.Schema(
+  {
+    milestoneNo: { type: Number },
+    title: { type: String,  },
+    description: { type: String },
+    dueDate: { type: Date },
+    targetDate: { type: Date },
+    deliveryDate: { type: Date },
+    percentage: { type: Number, default: 0 },
+    amount: { type: Number, required: true, min: 0 },
+    invoicedAmount: { type: Number, default: 0, min: 0 },
+    status: {
+      type: String,
+      enum: [
+        "pending", "in_progress", "completed", "verified",
+        "Pending", "In Progress", "Completed", "Verified",
+      ],
+      default: "pending",
+    },
+    remarks: { type: String },
+  }
+);
 
+// ─── Resource Schema ─────────────────────────────────────────────
+const resourceSchema = new mongoose.Schema(
+  {
+    resourceId: { type: String },
+    name: { type: String },
+    resourceName: { type: String },
+    role: { type: String },
+    designation: { type: String },
+    startDate: { type: Date },
+    endDate: { type: Date },
+    ratePerDay: { type: Number, default: 0, min: 0 },
+    ratePerHour: { type: Number, default: 0, min: 0 },
+    ratePerMonth: { type: Number, default: 0, min: 0 },
+    dailyRate: { type: Number, default: 0, min: 0 },
+    billableHoursPerDay: { type: Number, default: 8, min: 0 },
+    status: {
+      type: String,
+      enum: ["Active", "On Leave", "Inactive"],
+      default: "Active",
+    },
+  }
+);
+
+// ─── Attendance Schema ───────────────────────────────────────────
+const attendanceRecordSchema = new mongoose.Schema(
+  {
+    resourceId: { type: String },
+    date: { type: Date, required: true },
+    hoursWorked: { type: Number, required: true, min: 0 },
+    description: { type: String },
+    approved: { type: Boolean, default: false },
+    approvedBy: { type: String },
+    approvalDate: { type: Date },
+  }
+);
+
+// ─── Main Purchase Order Schema ──────────────────────────────────
 const purchaseOrderSchema = new mongoose.Schema(
   {
     companyId: {
@@ -77,54 +133,64 @@ const purchaseOrderSchema = new mongoose.Schema(
     poDate: { type: Date, required: true },
     deliveryDate: { type: Date, required: true },
     referenceDate: { type: Date },
+    poreferencevalue: { type: String },
     currency: { type: String, default: "INR" },
 
-    // PO Category
+    direction: {
+      type: String,
+      enum: ["receivable", "payable"],
+      default: "receivable",
+    },
+
     poCategory: {
       type: String,
-      enum: ["general", "project", "staffing"],
+      enum: ["general", "project", "staffing", "retainer"],
       default: "general",
     },
 
-    // Billing Model
     billingModel: {
       type: String,
-      enum: ["fixed", "milestone", "daily", "monthly", "hourly"],
+      enum: ["fixed", "milestone", "daily", "monthly", "hourly", "headcount"],
       default: "fixed",
     },
 
-    // Payment Terms
     paymentTerms: {
       type: String,
-      enum: ["advance", "immediate", "net-15", "net-30", "net-45", "net-60", "net-90", "cod"],
-      default: "net-30",
+      enum: [
+        "milestone", "monthly", "hourly","weekly",
+        "advance", "immediate",
+        "net-15", "net-30", "net-45", "net-60", "net-90",
+        "on_milestone", "on_delivery", "cod",
+      ],
+      default: "monthly",
     },
 
-    // Vendor/Client Info
+    paymentSchedule: { type: String },
+    staffingConfig: { type: mongoose.Schema.Types.Mixed },
+
     vendor: { type: addressSchema, required: true },
     deliverTo: { type: addressSchema, required: true },
 
-    // Line Items
-    items: { type: [poLineItemSchema], required: true },
+    items: { type: [poLineItemSchema], default: [] },
+    milestones: { type: [poMilestoneSchema], default: [] },
+    resources: { type: [resourceSchema], default: [] },
+    attendanceRecords: { type: [attendanceRecordSchema], default: [] },
 
-    // Milestones (for project-based POs)
-    milestones: [poMilestoneSchema],
-
-    // Resources (for staffing POs)
-    resources: [resourceSchema],
-
-    // Attendance Records (for resource tracking)
-    attendanceRecords: [attendanceRecordSchema],
-
-    // Financial Totals
     totalTaxableValue: { type: Number, required: true, min: 0 },
+    taxType: { type: String, default: "GST" },
+    taxLabel: { type: String, default: "GST" },
+    taxSummary: { type: [taxBreakdownSchema], default: [] },
+    totalTaxAmount: { type: Number, default: 0, min: 0 },
     totalGSTAmount: { type: Number, default: 0, min: 0 },
+    totalCGSTAmount: { type: Number, default: 0, min: 0 },
+    totalSGSTAmount: { type: Number, default: 0, min: 0 },
+    totalIGSTAmount: { type: Number, default: 0, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     valueInWords: { type: String },
-
-    // Tracking
     totalInvoicedAmount: { type: Number, default: 0, min: 0 },
+    remainingInvoicableAmount: { type: Number, default: 0, min: 0 },
     totalPaidAmount: { type: Number, default: 0, min: 0 },
+
     status: {
       type: String,
       enum: ["OPEN", "PARTIALLY_INVOICED", "FULLY_INVOICED", "CLOSED"],
@@ -133,20 +199,27 @@ const purchaseOrderSchema = new mongoose.Schema(
     invoiceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Invoice" }],
 
     notes: { type: String },
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    createdAt: { type: Date, default: Date.now },
-    updatedAt: { type: Date, default: Date.now },
+    withSignature: { type: Boolean, default: false },
+
+    // Stored as String — User lives in a different DB, no ObjectId ref
+    createdBy: { type: String },
+    updatedBy: { type: String },
   },
   { timestamps: true }
 );
 
-// Index
+// ─── Indexes ─────────────────────────────────────────────────────
 purchaseOrderSchema.index({ companyId: 1, poNumber: 1 });
 purchaseOrderSchema.index({ companyId: 1, status: 1 });
 purchaseOrderSchema.index({ companyId: 1, poDate: -1 });
+purchaseOrderSchema.index({ companyId: 1, direction: 1 });
+purchaseOrderSchema.index({ companyId: 1, paymentTerms: 1 });
 
+// ─── Model Factory ───────────────────────────────────────────────
+// No pre-save hooks — they are unreliable with dynamically fetched
+// DB connections via getDatabase(). All defaulting (e.g. milestoneNo)
+// is handled in the controller before the document is saved.
 export const getPurchaseOrderModel = async () => {
-  const db = await connectInvoiceDB();
+  const db = getDatabase("invoice");
   return db.models.PurchaseOrder || db.model("PurchaseOrder", purchaseOrderSchema);
 };

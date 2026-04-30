@@ -13,14 +13,14 @@ const router = express.Router();
 
 router.use(protect);
 
-router.post("/", accessControlMiddleware({ entityKey: "Group", action: "CREATE" }), createGroup);
+router.post("/", accessControlMiddleware({ entityKey: "GROUPS", action: "CREATE" }), createGroup);
 
-router.get("/", getAllGroups);
+router.get("/", accessControlMiddleware({ entityKey: "GROUPS", action: "VIEW" }), getAllGroups);
 
-router.get("/:id", getGroupById);
+router.get("/:id", accessControlMiddleware({ entityKey: "GROUPS", action: "VIEW" }), getGroupById);
 
-router.put("/:id", accessControlMiddleware({ entityKey: "Group", action: "UPDATE" }), updateGroup);
+router.put("/:id", accessControlMiddleware({ entityKey: "GROUPS", action: "EDIT" }), updateGroup);
 
-router.delete("/:id", accessControlMiddleware({ entityKey: "Group", action: "DELETE" }), deleteGroup);
+router.delete("/:id", accessControlMiddleware({ entityKey: "GROUPS", action: "DELETE" }), deleteGroup);
 
 export default router;
