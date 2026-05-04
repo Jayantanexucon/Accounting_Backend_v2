@@ -10,6 +10,24 @@ import {
 const recalculateItemTotals = (po) => {
   if (!Array.isArray(po.items)) return po;
 
+  // ── Derive gstSplit from PO-level tax data ─────────────────────────────
+  // The repo doesn't have access to company/vendor state codes, but we can
+  // infer the split from the saved taxSummary or legacy CGST/SGST/IGST totals.
+  let gstSplit;
+  if (Array.isArray(po.taxSummary) && po.taxSummary.length > 0) {
+    const types = po.taxSummary.map((e) =>
+      String(e?.taxType || e?.label || "").trim().toUpperCase()
+    );
+    if (types.includes("CGST") || types.includes("SGST")) gstSplit = "INTRA";
+    else if (types.includes("IGST")) gstSplit = "INTER";
+  }
+  if (!gstSplit) {
+    const hasCgstSgst = (po.totalCGSTAmount || 0) > 0 || (po.totalSGSTAmount || 0) > 0;
+    const hasIgst = (po.totalIGSTAmount || 0) > 0;
+    if (hasCgstSgst && !hasIgst) gstSplit = "INTRA";
+    else if (hasIgst && !hasCgstSgst) gstSplit = "INTER";
+  }
+
   let recalculated = false;
   const items = po.items.map((item, index) => {
     // ── Assign stable itemId if missing ─────────────────────────
@@ -22,6 +40,7 @@ const recalculateItemTotals = (po) => {
     const normalizedTax = normalizeLineItemTax(item, {
       taxType: po.taxType,
       taxLabel: po.taxLabel,
+      gstSplit,
     });
     const computedTotalAmount =
       Number(item.totalAmount || 0) ||

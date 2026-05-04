@@ -173,6 +173,34 @@ export const normalizeLineItemTax = (item = {}, fallback = {}) => {
   // CRITICAL FIX: Prioritize gstRate over taxRate
   // gstRate is the source of truth from HSN, while taxRate might be stale from previous saves
   const taxRate = round2(item.gstRate ?? item.taxRate ?? fallback.gstRate ?? fallback.taxRate ?? 0);
+
+  // ── DERIVE gstSplit FROM EXISTING ITEM BREAKDOWN WHEN NOT PROVIDED ────────
+  // When recalculating old data (e.g. in repo recalculateItemTotals), the caller
+  // may not know the gstSplit. We can infer it from the item's existing taxBreakdown
+  // or its cgstAmount/sgstAmount/igstAmount fields so CGST+SGST items don't get
+  // collapsed into IGST on retrieval.
+  let effectiveGstSplit = fallback.gstSplit;
+  if (!effectiveGstSplit) {
+    const existingBreakdown = Array.isArray(item.taxBreakdown) ? item.taxBreakdown : [];
+    const breakdownTypes = existingBreakdown.map((e) =>
+      String(e?.taxType || e?.label || "").trim().toUpperCase()
+    );
+    const hasCgstOrSgst = breakdownTypes.includes("CGST") || breakdownTypes.includes("SGST");
+    const hasIgst = breakdownTypes.includes("IGST");
+
+    if (hasCgstOrSgst && !hasIgst) {
+      effectiveGstSplit = "INTRA";
+    } else if (hasIgst && !hasCgstOrSgst) {
+      effectiveGstSplit = "INTER";
+    } else if (!hasCgstOrSgst && !hasIgst) {
+      // No breakdown — fall back to individual split amount fields on item
+      const hasCgstAmt = round2(item.cgstAmount ?? 0) > 0;
+      const hasSgstAmt = round2(item.sgstAmount ?? 0) > 0;
+      const hasIgstAmt = round2(item.igstAmount ?? 0) > 0;
+      if ((hasCgstAmt || hasSgstAmt) && !hasIgstAmt) effectiveGstSplit = "INTRA";
+      else if (hasIgstAmt && !hasCgstAmt && !hasSgstAmt) effectiveGstSplit = "INTER";
+    }
+  }
   
   // ── CRITICAL FIX ──────────────────────────────────────────────────────────
   // ALWAYS recalculate tax amount from taxableValue × taxRate instead of trusting
@@ -201,11 +229,11 @@ export const normalizeLineItemTax = (item = {}, fallback = {}) => {
     // Rebuild the breakdown with recalculated amounts ONLY
     // CRITICAL: Do NOT pass item.cgstAmount, item.sgstAmount, item.igstAmount
     // as those are stale and would be reused. Let buildFallbackGstBreakdown
-    // derive them from the recalculated amount and gstSplit.
+    // derive them from the recalculated amount and effectiveGstSplit.
     taxBreakdown = buildFallbackGstBreakdown({
       rate: taxRate,
       amount: taxAmount,
-      gstSplit: fallback.gstSplit,
+      gstSplit: effectiveGstSplit,  // ← uses inferred split when fallback didn't provide one
       // ← Explicitly NOT passing cgstAmount/sgstAmount/igstAmount from item!
     });
   } else {
@@ -221,7 +249,7 @@ export const normalizeLineItemTax = (item = {}, fallback = {}) => {
       cgstRate: item.cgstRate ?? fallback.cgstRate,
       sgstRate: item.sgstRate ?? fallback.sgstRate,
       igstRate: item.igstRate ?? fallback.igstRate,
-      gstSplit: fallback.gstSplit,
+      gstSplit: effectiveGstSplit,  // ← same here
     });
   }
 

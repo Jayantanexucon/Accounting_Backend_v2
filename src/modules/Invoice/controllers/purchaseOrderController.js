@@ -11,6 +11,7 @@ import {
   buildTaxMeta,
   normalizeLineItemTax,
   round2,
+  deriveLegacyGstTotals,
 } from "../utils/taxNormalization.js";
 import {
   createPurchaseOrderRepo,
@@ -36,7 +37,7 @@ const extractClientCode = (vendorName = "") => {
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
-  
+
   // Return first 4 letters/numbers, or at least 3 if available
   return cleaned.substring(0, 4) || "CLIE";
 };
@@ -56,22 +57,22 @@ const generatePONumber = async (companyId, vendorName = "", poDate = new Date())
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
     const dateStr = `${year}${month}${day}`;
-    
+
     // Extract client code (first 3-4 letters)
     const clientCode = extractClientCode(vendorName);
-    
+
     // Get TOTAL count of all POs for this vendor across ALL time to generate unique number
     const PurchaseOrder = await getPurchaseOrderModel();
-    
+
     const countForVendor = await PurchaseOrder.countDocuments({
       companyId: companyId,
       "vendor.name": vendorName,
     });
-    
+
     // Sequential number: pad with zeros (e.g., 00001, 00002)
     // This ensures the sequence never resets and is unique per vendor
     const sequenceNumber = String(countForVendor + 1).padStart(5, "0");
-    
+
     return `PO-${dateStr}-${clientCode}-${sequenceNumber}`;
   } catch (error) {
     console.error("Error generating PO number:", error);
@@ -106,10 +107,12 @@ const getGstSplit = (fromAddress = {}, toAddress = {}) => {
 };
 
 const getCompanyStateCode = (company = {}) =>
-  normalizeStateCode(company?.taxDetails?.gstin || company?.registeredAddress?.stateCode);
-
+  normalizeStateCode(
+    company?.registeredAddress?.stateCode ||
+    company?.taxDetails?.gstin
+  );
 const getPartyStateCode = (party = {}) =>
-  normalizeStateCode(party?.GSTIN || party?.gstin || party?.stateCode);
+  normalizeStateCode(party?.stateCode || party?.GSTIN || party?.gstin);
 
 const getCompanyBasedGstSplit = (company = {}, party = {}) => {
   const companyStateCode = getCompanyStateCode(company);
@@ -146,8 +149,18 @@ export const createPurchaseOrder = async (req, res, next) => {
     // ── Totals ────────────────────────────────────────────────────
     let totalTaxableValue = 0;
     let totalAmount = 0;
-    const gstSplit =
-      getCompanyBasedGstSplit(company, vendor) || getGstSplit(vendor, deliverTo);
+
+    // CRITICAL: Determine GST split (INTRA = CGST+SGST, INTER = IGST)
+    // Primary: Compare company state with vendor state
+    // Fallback: Use vendor state comparison with deliverTo only if company state is unavailable
+    let gstSplit = getCompanyBasedGstSplit(company, vendor);
+
+    // Only fallback to vendor-deliverTo comparison if company-based comparison failed
+    // This prevents wrong INTER determination when company state is missing
+    if (!gstSplit && vendor && deliverTo) {
+      gstSplit = getGstSplit(vendor, deliverTo);
+    }
+
     const normalizedItems = Array.isArray(items)
       ? items.map((item) => {
         const normalizedTax = normalizeLineItemTax(item, {
@@ -197,6 +210,35 @@ export const createPurchaseOrder = async (req, res, next) => {
     if (paymentTerms === "milestone") {
       totalTaxableValue = Number(req.body.totalTaxableValue) || totalTaxableValue;
       totalAmount = Number(req.body.totalAmount) || totalAmount;
+
+      // For milestone POs, rebuild tax meta with contract-level totals and ensure proper CGST/SGST split
+      const totalTaxAmount = totalAmount - totalTaxableValue;
+      const taxSummary = req.body.taxSummary || [];
+
+      // If no tax summary provided but we have tax amount, generate it based on gstSplit
+      if (taxSummary.length === 0 && totalTaxAmount > 0 && gstSplit) {
+        if (gstSplit === "INTRA") {
+          // Split equally between CGST and SGST
+          const halfTax = round2(totalTaxAmount / 2);
+          taxSummary.push(
+            { taxType: "CGST", label: "CGST", rate: 0, amount: halfTax },
+            { taxType: "SGST", label: "SGST", rate: 0, amount: round2(totalTaxAmount - halfTax) }
+          );
+        } else if (gstSplit === "INTER") {
+          // All tax goes to IGST
+          taxSummary.push(
+            { taxType: "IGST", label: "IGST", rate: 0, amount: totalTaxAmount }
+          );
+        }
+      }
+
+      // Rebuild tax meta with corrected data
+      const legacyTotals = deriveLegacyGstTotals(taxSummary);
+      Object.assign(computedTaxMeta, {
+        taxSummary,
+        totalTaxAmount: round2(totalTaxAmount),
+        ...legacyTotals,
+      });
     }
 
     // ── Milestone defaults ────────────────────────────────────────
@@ -355,7 +397,7 @@ export const updatePurchaseOrder = async (req, res, next) => {
     // Normalize milestones if present
     if (Array.isArray(updateData.milestones)) {
       updateData.milestones = updateData.milestones.map((m, index) => ({
-        ...m, 
+        ...m,
         milestoneNo: m.milestoneNo || index + 1,
         status: m.status || "pending",
       }));
