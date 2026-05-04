@@ -8,6 +8,7 @@ import {
   completeInvoiceAccounting,
   getInvoiceAccountingStatus,
   recordInvoicePayment,
+  reverseInvoicePayment,
   getInvoiceTdsReport,
 } from "../controllers/invoiceAccountingController.js";
 
@@ -49,6 +50,11 @@ router.post(
   "/:companyId/record-payment",
   accessControlMiddleware({ entityKey: "PAYMENT", action: "CREATE" }),
   recordInvoicePayment
+);
+router.post(
+  "/:companyId/reverse-payment",
+  accessControlMiddleware({ entityKey: "PAYMENT", action: "EDIT" }),
+  reverseInvoicePayment
 );
 router.get(
   "/:companyId/tds-report",

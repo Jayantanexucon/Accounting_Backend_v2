@@ -28,7 +28,7 @@ const journalSchema = new mongoose.Schema(
     },
     sourceType: {
       type: String,
-      enum: ["MANUAL", "INVOICE", "PAYMENT", "ADJUSTMENT", "EXCEL"],
+      enum: ["MANUAL", "INVOICE", "PAYMENT", "ADJUSTMENT", "EXCEL", "REVERSAL"],
       default: "MANUAL",
     },
     sourceId: String,

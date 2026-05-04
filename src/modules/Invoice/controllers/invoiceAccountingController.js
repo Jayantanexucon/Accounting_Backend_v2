@@ -1223,6 +1223,150 @@ export const recordInvoicePayment = async (req, res, next) => {
   }
 };
 
+export const reverseInvoicePayment = async (req, res, next) => {
+  try {
+    const { companyId } = req.params;
+    const { paymentId, invoiceId } = req.body;
+    const userId = getUserId(req);
+
+    if (!paymentId || !invoiceId) {
+      throw new AppError("paymentId and invoiceId are required", 400, "reverseInvoicePayment");
+    }
+
+    const Payment = await (await import("../../Account/models/Payment.js")).getPaymentModel();
+    const JournalLine = await (await import("../../Account/models/JournalLine.js")).getJournalLineModel();
+
+    const payment = await Payment.findById(paymentId).lean();
+    if (!payment) throw new AppError("Payment not found", 404, "reverseInvoicePayment");
+    if (normalizeCompanyId(payment.companyId) !== normalizeCompanyId(companyId)) {
+      throw new AppError("Payment does not belong to this company", 403, "reverseInvoicePayment");
+    }
+    if (payment.isReversed) {
+      throw new AppError("This payment has already been reversed", 400, "reverseInvoicePayment");
+    }
+
+    // Fetch the original journal lines
+    if (!payment.journalId) {
+      throw new AppError("Original payment journal not found", 404, "reverseInvoicePayment");
+    }
+    const originalLines = await JournalLine.find({ journalId: payment.journalId }).lean();
+    if (!originalLines.length) {
+      throw new AppError("No journal lines found for original payment", 404, "reverseInvoicePayment");
+    }
+
+    // Build reversal journal lines (swap debit <-> credit)
+    const reversalLines = originalLines.map((line) => ({
+      accountId: line.accountId,
+      accountCode: line.accountCode,
+      accountName: line.accountName,
+      debitAmount: Number(line.creditAmount || 0),
+      creditAmount: Number(line.debitAmount || 0),
+      description: `Reversal: ${line.description || ""}`,
+      linkedToClientId: line.linkedToClientId || null,
+      linkedToVendorId: line.linkedToVendorId || null,
+    }));
+
+    const invoice = await getInvoiceByIdRepo(invoiceId);
+    const reversalJournal = await createJournalWithLines({
+      journalData: {
+        number: generateDocumentNumber("REV", companyId),
+        voucherType: "JOURNAL",
+        date: new Date(),
+        referenceNumber: `REV-${payment.reference || invoiceId}`,
+        externalDocNo: invoice.invoiceNo,
+        narration: `Reversal of payment for invoice ${invoice.invoiceNo}`,
+        companyId: normalizeCompanyId(companyId),
+        sourceType: "REVERSAL",
+        sourceId: String(payment._id),
+        partyName: invoice?.billTo?.name || "",
+        totalDebit: reversalLines.reduce((s, l) => s + l.debitAmount, 0),
+        totalCredit: reversalLines.reduce((s, l) => s + l.creditAmount, 0),
+        status: "Approved",
+        approvalStatus: "Approved",
+        approvedBy: userId,
+        approvalDate: new Date(),
+        createdBy: userId,
+        updatedBy: userId,
+      },
+      lines: reversalLines,
+    });
+
+    // Mark the payment as reversed
+    const updatedPayment = await Payment.findByIdAndUpdate(
+      paymentId,
+      {
+        isReversed: true,
+        reversalJournalId: reversalJournal._id,
+        status: "CANCELLED",
+        updatedBy: userId,
+      },
+      { new: true }
+    ).lean();
+
+    // Roll back invoice paidAmount / remainingAmount / status
+    const settledAmount = Number(payment.originalAmount || payment.amountPaid || 0);
+    const tdsReversed   = Number(payment.tdsAmount || 0);
+    const newPaidAmount = Math.max(0, Number(invoice.paidAmount || 0) - settledAmount);
+    const newTdsAmount  = Math.max(0, Number(invoice.tdsAmount || 0) - tdsReversed);
+    const invoiceSettlement = getInvoiceSettlementAmount(invoice);
+    const newRemaining  = Math.max(0, invoiceSettlement - newPaidAmount);
+
+    let newStatus = invoice.status;
+    if (newPaidAmount <= 0) {
+      newStatus = "POSTED";
+    } else if (newRemaining > 0.01) {
+      newStatus = "PARTIALLY_PAID";
+    } else {
+      newStatus = "PAID";
+    }
+
+    // Keep the reversed payment in paymentIds so it remains visible in payment history.
+    // The isReversed flag on the Payment document marks it as reversed.
+    const updatedPaymentIds = (invoice.paymentIds || [])
+      .map((p) => (typeof p === "object" && p !== null ? p._id : p));
+
+    const updatedInvoice = await updateInvoiceRepo(invoice._id, {
+      paidAmount: newPaidAmount,
+      tdsAmount: newTdsAmount,
+      remainingAmount: newRemaining,
+      status: newStatus,
+      isFullyPaid: newRemaining < 0.01,
+      paymentIds: updatedPaymentIds,
+      updatedBy: userId,
+    });
+
+    await createAuditLog({
+      companyId: normalizeCompanyId(companyId),
+      entityType: "Payment",
+      entityId: String(paymentId),
+      action: "REVERSE_PAYMENT",
+      userId,
+      userEmail: req.user?.email,
+      userRole: req.user?.role,
+      changes: {
+        reversalJournalId: reversalJournal._id,
+        settledAmount,
+        newPaidAmount,
+        newRemaining,
+        newStatus,
+      },
+      description: `Payment reversed for invoice ${invoice.invoiceNo}`,
+    });
+
+    new ApiResponse({
+      statusCode: 200,
+      data: {
+        reversalJournal,
+        payment: updatedPayment,
+        invoice: updatedInvoice,
+      },
+      message: "Payment reversed successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getInvoiceTdsReport = async (req, res, next) => {
   try {
     const { companyId } = req.params;

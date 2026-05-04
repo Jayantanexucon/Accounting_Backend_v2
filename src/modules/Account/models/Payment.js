@@ -107,6 +107,15 @@ const paymentSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isReversed: {
+      type: Boolean,
+      default: false,
+    },
+    reversalJournalId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Journal",
+      default: null,
+    },
     updatedBy: {
       type: String,
     },
