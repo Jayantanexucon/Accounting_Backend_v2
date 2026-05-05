@@ -364,8 +364,8 @@ export const createInvoice = async (req, res, next) => {
     const taxMeta = buildTaxMeta({
       taxType: bodyTaxType || linkedPOData?.taxType,
       taxLabel: bodyTaxLabel || linkedPOData?.taxLabel,
-      taxSummary: bodyTaxSummary || linkedPOData?.taxSummary,
-      totalTaxAmount: bodyTotalTaxAmount ?? bodyGST,
+      taxSummary: undefined,
+      totalTaxAmount: undefined,
       items: normalizedItems,
     });
 
@@ -385,11 +385,11 @@ export const createInvoice = async (req, res, next) => {
       taxType: taxMeta.taxType,
       taxLabel: taxMeta.taxLabel,
       taxSummary: taxMeta.taxSummary,
-      totalTaxAmount: bodyTotalTaxAmount ?? taxMeta.totalTaxAmount,
-      totalCGSTAmount: bodyCGST ?? taxMeta.totalCGSTAmount,
-      totalSGSTAmount: bodySGST ?? taxMeta.totalSGSTAmount,
-      totalIGSTAmount: bodyIGST ?? taxMeta.totalIGSTAmount,
-      totalGSTAmount: bodyGST ?? taxMeta.totalGSTAmount,
+      totalTaxAmount: taxMeta.totalTaxAmount,
+      totalCGSTAmount: taxMeta.totalCGSTAmount,
+      totalSGSTAmount: taxMeta.totalSGSTAmount,
+      totalIGSTAmount: taxMeta.totalIGSTAmount,
+      totalGSTAmount: taxMeta.totalGSTAmount,
       invoiceAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
       amountDue: bodyInvoiceAmount ?? round2(invoiceAmount),
       netPayable: bodyNetPayable ?? round2(invoiceAmount),
@@ -575,11 +575,12 @@ export const updateInvoice = async (req, res, next) => {
           }),
         }));
       }
+      const hasUpdatedItems = Array.isArray(normalizedUpdateData.items);
       const taxMeta = buildTaxMeta({
         taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
         taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
-        taxSummary: normalizedUpdateData.taxSummary,
-        totalTaxAmount: normalizedUpdateData.totalTaxAmount,
+        taxSummary: hasUpdatedItems ? undefined : normalizedUpdateData.taxSummary,
+        totalTaxAmount: hasUpdatedItems ? undefined : normalizedUpdateData.totalTaxAmount,
         items: normalizedUpdateData.items || oldInvoice.items || [],
       });
       normalizedUpdateData = {
