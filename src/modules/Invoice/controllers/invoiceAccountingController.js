@@ -1245,8 +1245,12 @@ export const reverseInvoicePayment = async (req, res, next) => {
       throw new AppError("This payment has already been reversed", 400, "reverseInvoicePayment");
     }
 
-    // Fetch the original journal lines
+    // Fetch the original journal and its lines
     if (!payment.journalId) {
+      throw new AppError("Original payment journal not found", 404, "reverseInvoicePayment");
+    }
+    const originalJournal = await getJournalByIdRepo(payment.journalId);
+    if (!originalJournal) {
       throw new AppError("Original payment journal not found", 404, "reverseInvoicePayment");
     }
     const originalLines = await JournalLine.find({ journalId: payment.journalId }).lean();
@@ -1269,15 +1273,15 @@ export const reverseInvoicePayment = async (req, res, next) => {
     const invoice = await getInvoiceByIdRepo(invoiceId);
     const reversalJournal = await createJournalWithLines({
       journalData: {
-        number: generateDocumentNumber("REV", companyId),
+        number: `REV-${originalJournal.number}`,
         voucherType: "JOURNAL",
         date: new Date(),
-        referenceNumber: `REV-${payment.reference || invoiceId}`,
+        referenceNumber: payment.reference || invoice.invoiceNo,
         externalDocNo: invoice.invoiceNo,
         narration: `Reversal of payment for invoice ${invoice.invoiceNo}`,
         companyId: normalizeCompanyId(companyId),
         sourceType: "REVERSAL",
-        sourceId: String(payment._id),
+        sourceId: String(invoice._id),
         partyName: invoice?.billTo?.name || "",
         totalDebit: reversalLines.reduce((s, l) => s + l.debitAmount, 0),
         totalCredit: reversalLines.reduce((s, l) => s + l.creditAmount, 0),
