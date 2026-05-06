@@ -73,7 +73,7 @@ const getCompanyStateCode = (company = {}) =>
   normalizeStateCode(company?.taxDetails?.gstin || company?.registeredAddress?.stateCode);
 
 const getPartyStateCode = (party = {}) =>
-  normalizeStateCode(party?.GSTIN || party?.gstin || party?.stateCode);
+  normalizeStateCode(party?.stateCode || party?.gstStateCode || party?.GSTIN || party?.gstin);
 
 const getCompanyBasedGstSplit = (company = {}, party = {}) => {
   const companyStateCode = getCompanyStateCode(company);
@@ -81,6 +81,16 @@ const getCompanyBasedGstSplit = (company = {}, party = {}) => {
 
   if (!companyStateCode || !partyStateCode) return undefined;
   return companyStateCode === partyStateCode ? "INTRA" : "INTER";
+};
+
+const getInvoiceGstSplit = (company = {}, billTo = {}, shipTo = {}) => {
+  // Ship-to is the editable place-of-supply address in the invoice UI. Prefer
+  // it over bill-to/linked PO data so backend persistence matches the preview.
+  return (
+    getCompanyBasedGstSplit(company, shipTo) ||
+    getCompanyBasedGstSplit(company, billTo) ||
+    getGstSplit(billTo, shipTo)
+  );
 };
 
 const findTaxPayableAccount = (accounts = [], preferredType = "GST") => {
@@ -313,9 +323,9 @@ export const createInvoice = async (req, res, next) => {
       linkedPO ? getPurchaseOrderByIdRepo(linkedPO) : Promise.resolve(null),
       companyId ? findCompanyByIdRepo(companyId) : Promise.resolve(null),
     ]);
-    const gstSplit =
-      getCompanyBasedGstSplit(company, linkedPOData?.vendor || billTo) ||
-      getGstSplit(linkedPOData?.vendor || billTo, linkedPOData?.deliverTo || shipTo);
+    const effectiveBillTo = billTo || linkedPOData?.vendor;
+    const effectiveShipTo = shipTo || linkedPOData?.deliverTo;
+    const gstSplit = getInvoiceGstSplit(company, effectiveBillTo, effectiveShipTo);
 
     let totalTaxableValue = 0;
     let invoiceAmount = 0;
@@ -354,8 +364,8 @@ export const createInvoice = async (req, res, next) => {
     const taxMeta = buildTaxMeta({
       taxType: bodyTaxType || linkedPOData?.taxType,
       taxLabel: bodyTaxLabel || linkedPOData?.taxLabel,
-      taxSummary: bodyTaxSummary || linkedPOData?.taxSummary,
-      totalTaxAmount: bodyTotalTaxAmount ?? bodyGST,
+      taxSummary: undefined,
+      totalTaxAmount: undefined,
       items: normalizedItems,
     });
 
@@ -375,11 +385,11 @@ export const createInvoice = async (req, res, next) => {
       taxType: taxMeta.taxType,
       taxLabel: taxMeta.taxLabel,
       taxSummary: taxMeta.taxSummary,
-      totalTaxAmount: bodyTotalTaxAmount ?? taxMeta.totalTaxAmount,
-      totalCGSTAmount: bodyCGST ?? taxMeta.totalCGSTAmount,
-      totalSGSTAmount: bodySGST ?? taxMeta.totalSGSTAmount,
-      totalIGSTAmount: bodyIGST ?? taxMeta.totalIGSTAmount,
-      totalGSTAmount: bodyGST ?? taxMeta.totalGSTAmount,
+      totalTaxAmount: taxMeta.totalTaxAmount,
+      totalCGSTAmount: taxMeta.totalCGSTAmount,
+      totalSGSTAmount: taxMeta.totalSGSTAmount,
+      totalIGSTAmount: taxMeta.totalIGSTAmount,
+      totalGSTAmount: taxMeta.totalGSTAmount,
       invoiceAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
       amountDue: bodyInvoiceAmount ?? round2(invoiceAmount),
       netPayable: bodyNetPayable ?? round2(invoiceAmount),
@@ -552,12 +562,9 @@ export const updateInvoice = async (req, res, next) => {
     let normalizedUpdateData = { ...updateData };
     if (Array.isArray(normalizedUpdateData.items) || Array.isArray(normalizedUpdateData.taxSummary)) {
       if (Array.isArray(normalizedUpdateData.items)) {
-        const gstSplit =
-          getCompanyBasedGstSplit(company, normalizedUpdateData.billTo || linkedPOData?.vendor || oldInvoice.billTo) ||
-          getGstSplit(
-            linkedPOData?.vendor || normalizedUpdateData.billTo || oldInvoice.billTo,
-            linkedPOData?.deliverTo || normalizedUpdateData.shipTo || oldInvoice.shipTo,
-          );
+        const effectiveBillTo = normalizedUpdateData.billTo || oldInvoice.billTo || linkedPOData?.vendor;
+        const effectiveShipTo = normalizedUpdateData.shipTo || oldInvoice.shipTo || linkedPOData?.deliverTo;
+        const gstSplit = getInvoiceGstSplit(company, effectiveBillTo, effectiveShipTo);
         normalizedUpdateData.items = normalizedUpdateData.items.map((item) => ({
           ...item,
           totalAmount: Number(item.totalAmount || item.total || 0),
@@ -568,11 +575,12 @@ export const updateInvoice = async (req, res, next) => {
           }),
         }));
       }
+      const hasUpdatedItems = Array.isArray(normalizedUpdateData.items);
       const taxMeta = buildTaxMeta({
         taxType: normalizedUpdateData.taxType || oldInvoice.taxType,
         taxLabel: normalizedUpdateData.taxLabel || oldInvoice.taxLabel,
-        taxSummary: normalizedUpdateData.taxSummary,
-        totalTaxAmount: normalizedUpdateData.totalTaxAmount,
+        taxSummary: hasUpdatedItems ? undefined : normalizedUpdateData.taxSummary,
+        totalTaxAmount: hasUpdatedItems ? undefined : normalizedUpdateData.totalTaxAmount,
         items: normalizedUpdateData.items || oldInvoice.items || [],
       });
       normalizedUpdateData = {

@@ -35,11 +35,23 @@ const invoiceLineItemSchema = new mongoose.Schema({
 
 const addressSchema = new mongoose.Schema(
   {
+    _id: { type: String },
     name: { type: String, required: true },
     address: { type: String },
+    line1: { type: String },
+    line2: { type: String },
+    city: { type: String },
+    state: { type: String },
     stateCode: { type: String },
+    gstStateCode: { type: String },
+    country: { type: String },
+    pinCode: { type: String },
     GSTIN: { type: String },
     gstin: { type: String },
+    gstNumber: { type: String },
+    taxIdentifierType: { type: String },
+    taxIdentifierNumber: { type: String },
+    taxDetails: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },
   { _id: false }
 );

@@ -112,7 +112,7 @@ const getCompanyStateCode = (company = {}) =>
     company?.taxDetails?.gstin
   );
 const getPartyStateCode = (party = {}) =>
-  normalizeStateCode(party?.stateCode || party?.GSTIN || party?.gstin);
+  normalizeStateCode(party?.stateCode || party?.gstStateCode || party?.GSTIN || party?.gstin);
 
 const getCompanyBasedGstSplit = (company = {}, party = {}) => {
   const companyStateCode = getCompanyStateCode(company);
@@ -120,6 +120,17 @@ const getCompanyBasedGstSplit = (company = {}, party = {}) => {
 
   if (!companyStateCode || !partyStateCode) return undefined;
   return companyStateCode === partyStateCode ? "INTRA" : "INTER";
+};
+
+const getPoGstSplit = (company = {}, vendor = {}, deliverTo = {}) => {
+  // For Indian GST, the tax split should follow the delivery/place-of-supply
+  // address when it is available. The frontend recalculates from deliverTo, so
+  // the backend must use the same source instead of falling back to vendor.
+  return (
+    getCompanyBasedGstSplit(company, deliverTo) ||
+    getCompanyBasedGstSplit(company, vendor) ||
+    getGstSplit(vendor, deliverTo)
+  );
 };
 
 export const createPurchaseOrder = async (req, res, next) => {
@@ -150,16 +161,9 @@ export const createPurchaseOrder = async (req, res, next) => {
     let totalTaxableValue = 0;
     let totalAmount = 0;
 
-    // CRITICAL: Determine GST split (INTRA = CGST+SGST, INTER = IGST)
-    // Primary: Compare company state with vendor state
-    // Fallback: Use vendor state comparison with deliverTo only if company state is unavailable
-    let gstSplit = getCompanyBasedGstSplit(company, vendor);
-
-    // Only fallback to vendor-deliverTo comparison if company-based comparison failed
-    // This prevents wrong INTER determination when company state is missing
-    if (!gstSplit && vendor && deliverTo) {
-      gstSplit = getGstSplit(vendor, deliverTo);
-    }
+    // INTRA = CGST+SGST, INTER = IGST. Prefer deliverTo because users can
+    // change it independently of the party master.
+    const gstSplit = getPoGstSplit(company, vendor, deliverTo);
 
     const normalizedItems = Array.isArray(items)
       ? items.map((item) => {
@@ -419,9 +423,11 @@ export const updatePurchaseOrder = async (req, res, next) => {
     let totalAmount = 0;
 
     if (Array.isArray(updateData.items)) {
-      const gstSplit =
-        getCompanyBasedGstSplit(company, updateData.vendor || oldPO.vendor) ||
-        getGstSplit(updateData.vendor || oldPO.vendor, updateData.deliverTo || oldPO.deliverTo);
+      const gstSplit = getPoGstSplit(
+        company,
+        updateData.vendor || oldPO.vendor,
+        updateData.deliverTo || oldPO.deliverTo,
+      );
 
       updateData.items = updateData.items.map((item) => {
         const normalizedTax = normalizeLineItemTax(item, {
