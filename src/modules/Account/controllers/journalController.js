@@ -22,6 +22,7 @@ import {
   updateJournalApprovalRequestRepo,
 } from "../repos/journalApprovalRequestRepo.js";
 import { getAccountsRepo } from "../repos/accountRepo.js";
+import { getJournalModel } from "../models/Journal.js";
 
 const VALID_VOUCHER_TYPES = ["SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"];
 
@@ -161,9 +162,9 @@ const applyJournalUpdate = async (id, payload, userId) => {
     const existingBankLedgerTransactionIds = existingBankLedgerTransactions.map((item) => item._id);
     const relatedAllocations = existingBankLedgerTransactionIds.length
       ? await Allocation.find({
-          companyId,
-          bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
-        }).lean()
+        companyId,
+        bankLedgerTransactionId: { $in: existingBankLedgerTransactionIds },
+      }).lean()
       : [];
     const affectedBankTransactionIds = [
       ...new Set(relatedAllocations.map((item) => String(item.bankTransactionId)).filter(Boolean)),
@@ -209,8 +210,33 @@ const applyJournalUpdate = async (id, payload, userId) => {
 };
 
 const generateJournalNumber = async (companyId, voucherType) => {
-  const timestamp = Date.now();
-  return `${String(voucherType || "JOURNAL").replace(/\s+/g, "-").toUpperCase()}-${companyId}-${timestamp}`;
+  try {
+    const Journal = await getJournalModel();
+    const date = new Date();
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = String(date.getFullYear()).substring(2); // YY
+    const dateStr = `${day}${month}${year}`;
+
+    const prefix = String(voucherType || "JOURNAL")
+      .substring(0, 3)
+      .toUpperCase();
+
+    // Find journals for this company and date to get the serial
+    const count = await Journal.countDocuments({
+      companyId,
+      number: { $regex: new RegExp(`^${prefix}${dateStr}-`) },
+    });
+
+    const serial = String(count + 1).padStart(2, "0");
+    return `${prefix}-${dateStr}-${serial}`;
+  } catch (error) {
+    console.error("Error generating journal number:", error);
+    // Fallback to timestamp if something goes wrong
+    return `${String(voucherType || "JOURNAL")
+      .substring(0, 3)
+      .toUpperCase()}-${Date.now()}`;
+  }
 };
 
 export const createJournal = async (req, res, next) => {
@@ -664,3 +690,83 @@ export const updateJournalApprovalRequest = async (req, res, next) => {
     next(error);
   }
 };
+
+export const reverseJournal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      throw new AppError("Journal ID is required", 400, "reverseJournal");
+    }
+
+    const originalJournal = await getJournalByIdRepo(id);
+    if (!originalJournal) {
+      throw new AppError("Original journal not found", 404, "reverseJournal");
+    }
+
+    if (originalJournal.isReversed) {
+      throw new AppError("This journal has already been reversed", 400, "reverseJournal");
+    }
+
+    // Prepare reversal data
+    const reversalNumber = `REV-${originalJournal.number}`;
+
+    const reversalData = {
+      number: reversalNumber,
+      voucherType: originalJournal.voucherType,
+      date: new Date(), // Reversal happens now
+      referenceNumber: originalJournal.number, // Link back to original
+      externalDocNo: originalJournal.externalDocNo,
+      narration: `Reversal of journal ${originalJournal.number}. ${originalJournal.narration || ""}`,
+      companyId: originalJournal.companyId,
+      sourceType: "REVERSAL",
+      sourceId: originalJournal._id,
+      partyName: originalJournal.partyName,
+      totalDebit: originalJournal.totalCredit,
+      totalCredit: originalJournal.totalDebit,
+      status: "Posted",
+      approvalStatus: "Approved",
+      createdBy: req.user?.id,
+    };
+
+    const reversedJournal = await createJournalRepo(reversalData);
+
+    const reversedLinesData = (originalJournal.lines || []).map((line) => ({
+      journalId: reversedJournal._id,
+      accountId: line.account?._id || line.accountId,
+      accountCode: line.accountCode,
+      accountName: line.accountName,
+      companyId: originalJournal.companyId,
+      debitAmount: line.creditAmount || 0,
+      creditAmount: line.debitAmount || 0,
+      description: `Reversal: ${line.description || ""}`,
+      linkedToClientId: line.linkedToClientId,
+      linkedToVendorId: line.linkedToVendorId,
+      lineNumber: line.lineNumber,
+    }));
+
+    await createMultipleJournalLinesRepo(reversedLinesData);
+
+    await createAuditLog({
+      userId: req.user?.id,
+      entityType: "Journal",
+      entityId: reversedJournal._id,
+      action: "REVERSE",
+      changes: reversalData,
+      companyId: originalJournal.companyId,
+    });
+
+    // Mark original as reversed
+    await updateJournalRepo(id, { isReversed: true });
+
+    const finalJournal = await getJournalByIdRepo(reversedJournal._id);
+
+    new ApiResponse({
+      statusCode: 201,
+      data: finalJournal,
+      message: "Journal reversed successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
