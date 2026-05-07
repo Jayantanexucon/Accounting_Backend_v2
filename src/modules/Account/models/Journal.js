@@ -71,6 +71,10 @@ const journalSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isReversed: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

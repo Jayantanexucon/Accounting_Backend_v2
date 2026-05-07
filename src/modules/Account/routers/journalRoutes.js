@@ -15,6 +15,7 @@ import {
   requestJournalEditApproval,
   requestJournalDeleteApproval,
   updateJournalApprovalRequest,
+  reverseJournal,
 } from "../controllers/journalController.js";
 
 const router = express.Router();
@@ -58,5 +59,7 @@ router.post("/:id/approve", accessControlMiddleware({ entityKey: "JOURNAL", acti
 router.post("/:id/reject", accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }), rejectJournal);
 
 router.delete("/:id", accessControlMiddleware({ entityKey: "JOURNAL", action: "DELETE" }), deleteJournal);
+
+router.post("/:id/reverse", accessControlMiddleware({ entityKey: "JOURNAL", action: "EDIT" }), reverseJournal);
 
 export default router;
