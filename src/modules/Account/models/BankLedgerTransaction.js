@@ -30,6 +30,13 @@ const bankLedgerTransactionSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    bankReference: { type: String, default: "" },
+    paymentReference: { type: String, default: "" },
+    instrumentNo: { type: String, default: "" },
+    transactionMode: { type: String, default: "" },
+    counterpartyName: { type: String, default: "" },
+    reconciliationKeywords: { type: [String], default: [] },
+    searchableText: { type: String, default: "", index: true },
     bankLedgerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",

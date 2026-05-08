@@ -11,6 +11,38 @@ import { getBankLedgerTransactionModel } from "../models/BankLedgerTransaction.j
  * Normalizes text for comparison (reference, description)
  */
 const normalize = (text) => String(text || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+const IGNORE_NARRATION_TOKENS = new Set([
+  "upi", "neft", "rtgs", "imps", "trf", "trtr", "cr", "dr", "bank", "txn",
+  "transfer", "payment", "received", "deposit", "withdrawal",
+]);
+
+const normalizeNarration = (text = "") => {
+  const cleaned = String(text || "")
+    .toLowerCase()
+    .replace(/[\/\-_]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const tokens = cleaned
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token && !IGNORE_NARRATION_TOKENS.has(token));
+  return {
+    normalizedNarration: tokens.join(" "),
+    narrationTokens: tokens,
+    extractedReferences: tokens.filter((token) => /\d/.test(token) && token.length >= 4),
+  };
+};
+
+const buildSearchableText = (...parts) =>
+  normalizeNarration(parts.filter(Boolean).join(" ")).normalizedNarration;
+
+const tokenSimilarity = (leftTokens = [], rightText = "") => {
+  const rightTokens = new Set(normalizeNarration(rightText).narrationTokens);
+  if (!leftTokens.length || !rightTokens.size) return 0;
+  const matched = leftTokens.filter((token) => rightTokens.has(token));
+  return matched.length / Math.max(leftTokens.length, rightTokens.size);
+};
 const hasStrongTextMatch = (left, right) => {
   const a = normalize(left);
   const b = normalize(right);
@@ -60,15 +92,14 @@ const logReconciliation = (stage, payload = {}) => {
   console.log(`[BRS][${stage}]`, payload);
 };
 
-/**
- * Calculates match score between a bank transaction and an accounting entry
- * IF reference matches AND amount matches: score = 100
- * ELSE IF amount matches AND date difference <= 2 days: score = 80
- * ELSE IF narration similarity: score = 60
- */
 const calculateScore = (bankTx, ledgerTx) => {
   const bankRef = normalize(bankTx.referenceNo || bankTx.reference);
-  const ledgerRef = normalize(ledgerTx.referenceNo);
+  const ledgerRef = normalize(
+    ledgerTx.referenceNo ||
+      ledgerTx.bankReference ||
+      ledgerTx.paymentReference ||
+      ledgerTx.instrumentNo,
+  );
 
   const bankAmount = Math.abs(bankTx.amount);
   const ledgerAmount = Math.abs(ledgerTx.amount);
@@ -104,34 +135,69 @@ const calculateScore = (bankTx, ledgerTx) => {
     };
   }
 
-  if (bankRef && ledgerRef && bankRef === ledgerRef && bankAmount === ledgerAmount) {
-    score = 100;
+  const amountMatches = Math.abs(bankAmount - ledgerAmount) < 0.01;
+  const sameDate = dateDiffDays < 1;
+  const nearDate = dateDiffDays <= 2;
+  const bankReferences = [
+    bankRef,
+    ...(bankTx.extractedReferences || []).map((item) => normalize(item)),
+  ].filter(Boolean);
+  const ledgerReferences = [
+    ledgerRef,
+    ...(ledgerTx.reconciliationKeywords || []).map((item) => normalize(item)),
+  ].filter(Boolean);
+  const referenceMatches =
+    bankReferences.length > 0 &&
+    ledgerReferences.length > 0 &&
+    bankReferences.some((left) =>
+      ledgerReferences.some((right) => left === right || (left.length >= 6 && right.includes(left)) || (right.length >= 6 && left.includes(right))),
+    );
+  const narrationScore = tokenSimilarity(
+    bankTx.narrationTokens || normalizeNarration(bankTx.description).narrationTokens,
+    `${ledgerTx.searchableText || ""} ${ledgerTx.narration || ""}`,
+  );
+  const invoiceMatches = /INV[A-Z0-9-]*\d+/i.test(`${bankTx.description || ""} ${bankTx.reference || ""}`)
+    && /INV[A-Z0-9-]*\d+/i.test(`${ledgerTx.searchableText || ""} ${ledgerTx.referenceNo || ""}`);
+  const partyName = String(ledgerTx.counterpartyName || "").trim();
+  const partyMatches = partyName && normalizeNarration(bankTx.description).normalizedNarration.includes(normalizeNarration(partyName).normalizedNarration);
+
+  score += 20;
+  reasons.push("Compatible bank/book direction");
+
+  if (referenceMatches) {
+    score += 50;
     reasons.push("Exact reference match");
+  }
+  if (amountMatches) {
+    score += 35;
     reasons.push("Exact amount match");
   }
-  else if (bankAmount === ledgerAmount && dateDiffDays <= 2) {
-    score = 80;
-    reasons.push("Exact amount match");
+  if (sameDate) {
+    score += 20;
+    reasons.push("Same date");
+  } else if (nearDate) {
+    score += 15;
     reasons.push(`Date within ${dateDiffDays.toFixed(0)} day(s)`);
   }
-  else if (bankAmount === ledgerAmount && hasStrongTextMatch(bankTx.description, ledgerTx.narration)) {
-    score = 100;
-    reasons.push("Exact amount match");
-    reasons.push("Strong narration/description match");
+  if (narrationScore >= 0.34) {
+    score += Math.round(25 * narrationScore);
+    reasons.push("Narration token similarity");
   }
-  else {
-    const bankDesc = normalize(bankTx.description);
-    const ledgerNar = normalize(ledgerTx.narration);
-    if (bankDesc && ledgerNar && (bankDesc.includes(ledgerNar) || ledgerNar.includes(bankDesc))) {
-      score = 60;
-      reasons.push("Partial narration/description match");
-    }
+  if (partyMatches) {
+    score += 20;
+    reasons.push("Party name match");
+  }
+  if (invoiceMatches) {
+    score += 25;
+    reasons.push("Invoice number match");
   }
 
-  if (bankAmount !== ledgerAmount) {
+  score = Math.min(100, score);
+
+  if (!amountMatches) {
     failures.push(`Amount mismatch: bank=${formatAmount(bankAmount)} book=${formatAmount(ledgerAmount)}`);
   }
-  if (!bankRef || !ledgerRef || bankRef !== ledgerRef) {
+  if (!referenceMatches) {
     failures.push(`Reference mismatch: bank=${bankRef || "EMPTY"} book=${ledgerRef || "EMPTY"}`);
   }
   if (dateDiffDays > 2) {
@@ -143,6 +209,7 @@ const calculateScore = (bankTx, ledgerTx) => {
 
   return {
     score,
+    status: score >= 80 ? "AUTO_MATCHED" : score >= 60 ? "SUGGESTED" : "UNMATCHED",
     reasons,
     failures,
     facts: {
@@ -171,6 +238,8 @@ const getStatusFromAmounts = (totalAmount, allocatedAmount) => {
 export const BankReconciliationService = {
   areTransactionDirectionsCompatible,
   normalizeTransactionType,
+  normalizeNarration,
+  buildSearchableText,
 
   async syncAllocationStatus(bankTransactionId, bankLedgerTransactionId) {
     const BankTransaction = await getBankTransactionModel();
@@ -248,6 +317,31 @@ export const BankReconciliationService = {
         transactionType: debitAmount > creditAmount ? "DEBIT" : "CREDIT",
         referenceNo: journal.referenceNumber || journal.externalDocNo || journal.number || "",
         narration: line.description || journal.narration || "",
+        bankReference: journal.bankReference || line.bankReference || "",
+        paymentReference: journal.paymentReference || line.paymentReference || journal.referenceNumber || "",
+        instrumentNo: journal.instrumentNo || line.instrumentNo || "",
+        transactionMode: journal.transactionMode || line.transactionMode || journal.voucherType || "",
+        counterpartyName: journal.counterpartyName || line.counterpartyName || journal.partyName || "",
+        reconciliationKeywords: [
+          ...(journal.reconciliationKeywords || []),
+          ...(line.reconciliationKeywords || []),
+          journal.referenceNumber,
+          journal.externalDocNo,
+          journal.partyName,
+          line.description,
+          line.accountName,
+        ].filter(Boolean),
+        searchableText: buildSearchableText(
+          journal.searchableText,
+          line.searchableText,
+          journal.number,
+          journal.referenceNumber,
+          journal.externalDocNo,
+          journal.narration,
+          journal.partyName,
+          line.description,
+          line.accountName,
+        ),
         bankLedgerId: line.accountId,
         journalId: journal._id,
         journalLineId: line._id,
@@ -333,8 +427,7 @@ export const BankReconciliationService = {
       failures: bestEvaluation?.failures || [],
     });
 
-    // AUTO MATCH decision (Score >= 100 as per CORE PRINCIPLE Flow 5)
-    if (highestScore >= 100) {
+    if (highestScore >= 80) {
       // Check remaining amount on bank transaction
       const existingAllocations = await Allocation.find({ bankTransactionId: bestMatch._id }).lean();
       const alreadyAllocated = existingAllocations.reduce((sum, a) => sum + Number(a.allocatedAmount || 0), 0);
@@ -389,9 +482,28 @@ export const BankReconciliationService = {
       });
     }
 
+    if (bestMatch && highestScore >= 60) {
+      const suggestions = Array.isArray(bestMatch.matchSuggestions) ? bestMatch.matchSuggestions : [];
+      const nextSuggestions = [
+        ...suggestions.filter((item) => String(item.paymentId) !== String(ledgerTxId)),
+        {
+          paymentId: String(ledgerTxId),
+          score: highestScore,
+          matchType: "POTENTIAL",
+          reasons: bestEvaluation?.reasons || [],
+        },
+      ]
+        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .slice(0, 5);
+
+      await BankTransaction.findByIdAndUpdate(bestMatch._id, {
+        matchSuggestions: nextSuggestions,
+      });
+    }
+
     logReconciliation("AUTO_MATCH_FAILED", {
       ledgerTxId: String(ledgerTx._id),
-      reason: highestScore < 100 ? "No candidate reached auto-match threshold" : "No valid allocation amount",
+      reason: highestScore < 80 ? "No candidate reached auto-match threshold" : "No valid allocation amount",
       highestScore,
       bestBankTransactionId: bestMatch ? String(bestMatch._id) : null,
       reasons: bestEvaluation?.reasons || [],
