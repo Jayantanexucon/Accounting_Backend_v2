@@ -621,25 +621,50 @@ export const importBankTransactions = async (req, res, next) => {
     const docs = transactions.map((t, index) => {
       const transactionDate = parseImportDate(t.transactionDate || t.date);
       const valueDate = parseImportDate(t.valueDate);
+      const debitAmount = Math.abs(Number(t.debitAmount || 0));
+      const creditAmount = Math.abs(Number(t.creditAmount || 0));
+      const direction = (t.direction || t.type || (creditAmount > 0 ? "CREDIT" : debitAmount > 0 ? "DEBIT" : "CREDIT")).toUpperCase();
+      const amount = Math.abs(Number(t.amount || (direction === "CREDIT" ? creditAmount : debitAmount) || 0));
+      const normalizedNarration = BankReconciliationService.normalizeNarration(t.description || t.particulars || "");
+      const reference = String(t.referenceNumber || t.reference || t.UTR || "").trim().toUpperCase();
 
       if (!transactionDate) {
         throw new AppError(`Invalid transaction date at import row ${index + 1}`, 400);
+      }
+      if (!amount || Number.isNaN(amount)) {
+        throw new AppError(`Invalid amount at import row ${index + 1}`, 400);
+      }
+      if (debitAmount > 0 && creditAmount > 0) {
+        throw new AppError(`Both debit and credit are filled at import row ${index + 1}`, 400);
       }
 
       return {
         companyId,
         date: transactionDate,
         transactionDate,
-        amount: Math.abs(t.amount || 0),
-        type: (t.type || "CREDIT").toUpperCase(),
-        referenceNo: String(t.reference || t.UTR || "").trim().toUpperCase(),
-        normalizedReference: String(t.reference || t.UTR || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""),
-        reference: String(t.reference || t.UTR || "").trim().toUpperCase(),
+        amount,
+        debitAmount,
+        creditAmount,
+        direction,
+        type: direction,
+        referenceNo: reference,
+        normalizedReference: reference.replace(/[^A-Z0-9]/g, ""),
+        reference,
         description: t.description || "",
         bankLedgerId: t.bankLedgerId, // Frontend should provide this
-        balance: t.balance ?? null,
+        balance: t.balance ?? t.closingBalance ?? null,
+        closingBalance: t.closingBalance ?? t.balance ?? null,
         valueDate,
         fileName: t.fileName || "",
+        originalRowData: t.originalRowData || null,
+        normalizedNarration: normalizedNarration.normalizedNarration,
+        narrationTokens: normalizedNarration.narrationTokens,
+        extractedReferences: [
+          ...new Set([
+            ...normalizedNarration.extractedReferences,
+            reference,
+          ].filter(Boolean)),
+        ],
         reconciliationStatus: "UNMATCHED",
         isReconciled: false,
         createdBy: req.user?.id,

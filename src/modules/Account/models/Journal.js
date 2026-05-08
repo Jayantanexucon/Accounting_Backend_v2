@@ -21,6 +21,13 @@ const journalSchema = new mongoose.Schema(
     referenceNumber: String,
     externalDocNo: String,
     narration: String,
+    bankReference: { type: String, default: "" },
+    paymentReference: { type: String, default: "" },
+    instrumentNo: { type: String, default: "" },
+    transactionMode: { type: String, default: "" },
+    counterpartyName: { type: String, default: "" },
+    reconciliationKeywords: { type: [String], default: [] },
+    searchableText: { type: String, default: "", index: true },
     companyId: {
       type: String,
       required: [true, "Company ID is required"],

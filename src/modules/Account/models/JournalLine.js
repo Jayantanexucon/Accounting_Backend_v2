@@ -31,6 +31,13 @@ const journalLineSchema = new mongoose.Schema(
       default: 0,
     },
     description: String,
+    bankReference: { type: String, default: "" },
+    paymentReference: { type: String, default: "" },
+    instrumentNo: { type: String, default: "" },
+    transactionMode: { type: String, default: "" },
+    counterpartyName: { type: String, default: "" },
+    reconciliationKeywords: { type: [String], default: [] },
+    searchableText: { type: String, default: "", index: true },
     linkedToClientId: {
       type: String,
     },

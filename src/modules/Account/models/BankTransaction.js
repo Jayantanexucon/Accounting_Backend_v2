@@ -27,6 +27,18 @@ const bankTransactionSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Amount is required"],
     },
+    debitAmount: {
+      type: Number,
+      default: 0,
+    },
+    creditAmount: {
+      type: Number,
+      default: 0,
+    },
+    direction: {
+      type: String,
+      enum: ["DEBIT", "CREDIT"],
+    },
     type: {
       type: String,
       enum: ["DEBIT", "CREDIT"],
@@ -52,6 +64,20 @@ const bankTransactionSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    normalizedNarration: {
+      type: String,
+      default: "",
+      index: true,
+    },
+    narrationTokens: {
+      type: [String],
+      default: [],
+    },
+    extractedReferences: {
+      type: [String],
+      default: [],
+      index: true,
+    },
     bankLedgerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Account",
@@ -59,6 +85,14 @@ const bankTransactionSchema = new mongoose.Schema(
     },
     balance: {
       type: Number,
+      default: null,
+    },
+    closingBalance: {
+      type: Number,
+      default: null,
+    },
+    originalRowData: {
+      type: Object,
       default: null,
     },
     fileName: {
