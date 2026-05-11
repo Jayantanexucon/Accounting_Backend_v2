@@ -23,6 +23,9 @@ import {
 } from "../repos/journalApprovalRequestRepo.js";
 import { getAccountsRepo } from "../repos/accountRepo.js";
 import { getJournalModel } from "../models/Journal.js";
+import { getPaymentModel } from "../models/Payment.js";
+import { getInvoiceByIdRepo, updateInvoiceRepo } from "../../Invoice/repos/invoiceRepo.js";
+
 
 const VALID_VOUCHER_TYPES = ["SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"];
 
@@ -707,6 +710,23 @@ export const reverseJournal = async (req, res, next) => {
       throw new AppError("This journal has already been reversed", 400, "reverseJournal");
     }
 
+    // Block reversal if it's an INVOICE journal with active payments
+    if (originalJournal.sourceType === "INVOICE") {
+      const Payment = await getPaymentModel();
+      const activePayments = await Payment.countDocuments({
+        invoiceId: originalJournal.sourceId,
+        isReversed: false,
+      });
+
+      if (activePayments > 0) {
+        throw new AppError(
+          "Cannot reverse sales journal because the invoice has associated active payments. Reverse the payments first.",
+          400,
+          "reverseJournal"
+        );
+      }
+    }
+
     // Prepare reversal data
     const reversalNumber = `REV-${originalJournal.number}`;
 
@@ -757,6 +777,107 @@ export const reverseJournal = async (req, res, next) => {
 
     // Mark original as reversed
     await updateJournalRepo(id, { isReversed: true });
+
+    // Handle Invoice Payment Reversal if sourceType is PAYMENT
+    if (originalJournal.sourceType === "PAYMENT") {
+      try {
+        const Payment = await getPaymentModel();
+        const payment = await Payment.findOne({ journalId: id }).lean();
+
+        if (payment) {
+          const invoice = await getInvoiceByIdRepo(payment.invoiceId);
+          if (invoice) {
+            // Roll back invoice paidAmount / remainingAmount / status
+            const settledAmount = Number(payment.originalAmount || payment.amountPaid || 0);
+            const tdsReversed = Number(payment.tdsAmount || 0);
+            const newPaidAmount = Math.max(0, Number(invoice.paidAmount || 0) - settledAmount);
+            const newTdsAmount = Math.max(0, Number(invoice.tdsAmount || 0) - tdsReversed);
+
+            const invoiceSettlement = Number(invoice.invoiceAmount || invoice.amountDue || 0) - Number(invoice.tdsAmount || invoice.totalTDSAmount || 0);
+            const newRemaining = Math.max(0, invoiceSettlement - newPaidAmount);
+
+            let newStatus = invoice.status;
+            if (newPaidAmount <= 0) {
+              newStatus = "POSTED";
+            } else if (newRemaining > 0.01) {
+              newStatus = "PARTIALLY_PAID";
+            } else {
+              newStatus = "PAID";
+            }
+
+            // Update Invoice
+            await updateInvoiceRepo(invoice._id, {
+              paidAmount: newPaidAmount,
+              tdsAmount: newTdsAmount,
+              remainingAmount: newRemaining,
+              status: newStatus,
+              isFullyPaid: newRemaining < 0.01,
+              updatedBy: req.user?.id,
+            });
+
+            // Update Payment Record
+            await Payment.findByIdAndUpdate(payment._id, {
+              isReversed: true,
+              reversalJournalId: reversedJournal._id,
+              status: "CANCELLED",
+              updatedBy: req.user?.id,
+            });
+
+            // Audit Log for Payment Reversal
+            await createAuditLog({
+              companyId: originalJournal.companyId,
+              entityType: "Payment",
+              entityId: String(payment._id),
+              action: "REVERSE_PAYMENT",
+              userId: req.user?.id,
+              changes: {
+                reversalJournalId: reversedJournal._id,
+                settledAmount,
+                newPaidAmount,
+                newStatus,
+              },
+              description: `Payment reversed via journal reversal for invoice ${invoice.invoiceNo}`,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Error updating invoice/payment during journal reversal:", err);
+        // We don't throw here to ensure the journal reversal itself is considered successful
+        // as the journal entry has already been created.
+      }
+    }
+
+    // Handle Invoice Sales Journal Reversal if sourceType is INVOICE
+    if (originalJournal.sourceType === "INVOICE") {
+      try {
+        const invoice = await getInvoiceByIdRepo(originalJournal.sourceId);
+        if (invoice) {
+          // Update Invoice: Clear salesJournalId and set accountingStatus to pending
+          await updateInvoiceRepo(invoice._id, {
+            salesJournalId: null,
+            accountingStatus: "pending",
+            updatedBy: req.user?.id,
+          });
+
+          // Audit Log for Invoice Journal Reversal
+          await createAuditLog({
+            companyId: originalJournal.companyId,
+            entityType: "Invoice",
+            entityId: String(invoice._id),
+            action: "REVERSE_SALES_JOURNAL",
+            userId: req.user?.id,
+            changes: {
+              salesJournalId: null,
+              accountingStatus: "pending",
+              reversalJournalId: reversedJournal._id,
+            },
+            description: `Sales journal reversed for invoice ${invoice.invoiceNo}`,
+          });
+        }
+      } catch (err) {
+        console.error("Error updating invoice during sales journal reversal:", err);
+      }
+    }
 
     const finalJournal = await getJournalByIdRepo(reversedJournal._id);
 
