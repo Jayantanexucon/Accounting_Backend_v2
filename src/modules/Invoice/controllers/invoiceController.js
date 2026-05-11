@@ -41,6 +41,9 @@ import {
   normalizeLineItemTax,
   round2,
 } from "../utils/taxNormalization.js";
+import { postSalesJournalForInvoice } from "./invoiceAccountingController.js";
+
+const toMongoId = (value) => value?._id || value || null;
 
 const generateInvoiceNumber = async (companyId) => {
   const timestamp = Date.now();
@@ -762,13 +765,28 @@ export const approveInvoice = async (req, res, next) => {
     }
 
     const invoice = await getInvoiceByIdRepo(id);
-
-    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
+    const accountingResult = await postSalesJournalForInvoice(
+      id,
+      req.user?.id,
+      req.user || {},
+      { allowPendingApproval: true }
+    );
+    const salesJournalId =
+      toMongoId(accountingResult?.journal) ||
+      toMongoId(accountingResult?.invoice?.salesJournalId) ||
+      toMongoId(invoice.salesJournalId);
 
     const updateData = {
       approvalStatus: "Approved",
       status: "POSTED",
-      salesJournalId: salesJournalId || invoice.salesJournalId || null,
+      salesJournalId,
+      debtorAccountId: toMongoId(accountingResult?.ledger) || toMongoId(invoice.debtorAccountId),
+      revenueAccountId:
+        toMongoId(accountingResult?.invoice?.revenueAccountId) ||
+        toMongoId(invoice.revenueAccountId),
+      taxAccountId:
+        toMongoId(accountingResult?.invoice?.taxAccountId) ||
+        toMongoId(invoice.taxAccountId),
       accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
       approvedBy: req.user?.id,
       approvalDate: new Date(),
@@ -895,23 +913,14 @@ export const postSalesJournal = async (req, res, next) => {
       throw new AppError("Invoice ID is required", 400, "postSalesJournal");
     }
 
-    const invoice = await getInvoiceByIdRepo(id);
-
-    if (invoice.approvalStatus !== "Approved") {
-      throw new AppError("Invoice must be approved before posting sales journal", 400, "postSalesJournal");
-    }
-
-    const salesJournalId = await ensureSalesJournalForInvoice(invoice, req.user?.id);
-    const updatedInvoice = await updateInvoiceRepo(id, {
-      salesJournalId,
-      accountingStatus: salesJournalId ? "completed" : invoice.accountingStatus || "pending",
-      updatedBy: req.user?.id,
-    });
+    const result = await postSalesJournalForInvoice(id, req.user?.id, req.user || {});
 
     new ApiResponse({
       statusCode: 200,
-      data: updatedInvoice,
-      message: "Sales journal posted successfully",
+      data: result.invoice,
+      message: result.alreadyPosted
+        ? "Sales journal already posted for this invoice"
+        : "Sales journal posted successfully",
     }).send(res);
   } catch (error) {
     next(error);
