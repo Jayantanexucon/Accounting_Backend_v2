@@ -334,7 +334,18 @@ export const createPurchaseOrder = async (req, res, next) => {
 
 export const getAllPurchaseOrders = async (req, res, next) => {
   try {
-    const { companyId, status, direction, paymentTerms } = req.query;
+    const { 
+      companyId, 
+      status, 
+      direction, 
+      paymentTerms, 
+      poNumber,
+      clientName,
+      invoiceState,
+      poStatus,
+      limit = 1000,
+      skip = 0
+    } = req.query;
 
     if (!companyId) {
       throw new AppError("companyId is required", 400, "getAllPurchaseOrders");
@@ -342,14 +353,55 @@ export const getAllPurchaseOrders = async (req, res, next) => {
 
     const filter = { companyId };
     if (status) filter.status = status;
+    if (poStatus) filter.status = poStatus; // Accept both 'status' and 'poStatus'
     if (direction) filter.direction = direction;
     if (paymentTerms) filter.paymentTerms = paymentTerms;
 
+    // PO Number search (partial match)
+    if (poNumber) {
+      filter.poNumber = { $regex: poNumber, $options: "i" };
+    }
+
+    // Client Name search (partial match on vendor.name or client.name)
+    if (clientName) {
+      filter.$or = [
+        { "vendor.name": { $regex: clientName, $options: "i" } },
+        { "client.name": { $regex: clientName, $options: "i" } },
+      ];
+    }
+
+    // Invoice State filter (derived from totalAmount and totalInvoicedAmount)
+    // This will be handled by filtering the results since it requires calculation
+    
     const pos = await getPurchaseOrdersRepo(filter);
+
+    // Post-process for invoiceState filter if provided
+    let filteredPos = pos;
+    if (invoiceState) {
+      filteredPos = pos.filter(po => {
+        const totalAmount = po.totalAmount || 0;
+        const totalInvoicedAmount = po.totalInvoicedAmount || 0;
+
+        if (invoiceState === "OPEN_NO_INVOICE") {
+          return totalInvoicedAmount <= 0;
+        } else if (invoiceState === "PARTIALLY_INVOICED") {
+          return totalInvoicedAmount > 0 && totalInvoicedAmount < totalAmount;
+        } else if (invoiceState === "FULLY_INVOICED") {
+          return totalInvoicedAmount >= totalAmount && totalAmount > 0;
+        } else if (invoiceState === "FULLY_PAID") {
+          return po.status === "CLOSED" && totalInvoicedAmount >= totalAmount;
+        }
+        return true;
+      });
+    }
+
+    // Apply pagination
+    const paginatedPos = filteredPos.slice(Number(skip), Number(skip) + Number(limit));
 
     new ApiResponse({
       statusCode: 200,
-      data: pos,
+      data: paginatedPos,
+      total: filteredPos.length,
       message: "Purchase Orders retrieved successfully",
     }).send(res);
   } catch (error) {
@@ -566,18 +618,30 @@ export const deletePurchaseOrder = async (req, res, next) => {
 
 export const getPurchaseOrderByNumber = async (req, res, next) => {
   try {
-    const { poNumber, companyId } = req.query;
+    const { poNumber, q, companyId } = req.query;
+    const searchTerm = poNumber || q;
 
-    if (!poNumber || !companyId) {
-      throw new AppError("poNumber and companyId are required", 400, "getPurchaseOrderByNumber");
+    if (!searchTerm || !companyId) {
+      throw new AppError("poNumber (or q) and companyId are required", 400, "getPurchaseOrderByNumber");
     }
 
-    const po = await getPurchaseOrderByNumberRepo(poNumber, companyId);
+    // Search for PO numbers that match (partial match)
+    const PurchaseOrder = await getPurchaseOrderModel();
+    const pos = await PurchaseOrder.find({
+      companyId,
+      poNumber: { $regex: searchTerm, $options: "i" },
+    }).limit(20);
+
+    // Return array of matching PO numbers with label format for dropdown
+    const results = pos.map(po => ({
+      label: po.poNumber,
+      _id: po._id,
+    }));
 
     new ApiResponse({
       statusCode: 200,
-      data: po,
-      message: "Purchase Order retrieved successfully",
+      data: results,
+      message: "Purchase Orders search completed",
     }).send(res);
   } catch (error) {
     next(error);
