@@ -441,13 +441,20 @@ const ensureInvoiceAccounts = async (invoice, userId) => {
   });
 
   const taxAccounts = {};
-  const taxSummary = Array.isArray(invoice.taxSummary) ? invoice.taxSummary : [];
+  const taxSummary = Array.isArray(invoice.taxSummary) ? [...invoice.taxSummary] : [];
   
   // Legacy support if taxSummary is empty but total amounts exist
   if (taxSummary.length === 0) {
     if (Number(invoice.totalCGSTAmount || 0) > 0) taxSummary.push({ label: "CGST Payable", taxType: "CGST", amount: invoice.totalCGSTAmount });
     if (Number(invoice.totalSGSTAmount || 0) > 0) taxSummary.push({ label: "SGST Payable", taxType: "SGST", amount: invoice.totalSGSTAmount });
     if (Number(invoice.totalIGSTAmount || 0) > 0) taxSummary.push({ label: "IGST Payable", taxType: "IGST", amount: invoice.totalIGSTAmount });
+    if (taxSummary.length === 0 && Number(invoice.totalGSTAmount || invoice.totalTaxAmount || 0) > 0) {
+      taxSummary.push({
+        label: "GST Payable",
+        taxType: "GST",
+        amount: Number(invoice.totalGSTAmount || invoice.totalTaxAmount || 0),
+      });
+    }
   }
 
   for (const tax of taxSummary) {
@@ -497,6 +504,7 @@ const ensureInvoiceAccounts = async (invoice, userId) => {
     clientLedger,
     salesAccount,
     taxAccounts,
+    taxSummary,
     tdsAccount,
   };
 };
@@ -526,10 +534,15 @@ const createJournalWithLines = async ({
   return getJournalByIdRepo(journal._id);
 };
 
-const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
+export const postSalesJournalForInvoice = async (
+  invoiceId,
+  userId,
+  reqUser = {},
+  options = {}
+) => {
   const invoice = await getInvoiceByIdRepo(invoiceId);
 
-  if (invoice.approvalStatus !== "Approved") {
+  if (!options.allowPendingApproval && invoice.approvalStatus !== "Approved") {
     throw new AppError("Invoice must be approved before posting sales journal", 400, "postSalesJournalForInvoice");
   }
 
@@ -545,7 +558,7 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
   }
 
   const accounts = await ensureInvoiceAccounts(invoice, userId);
-  const totalAmount = getInvoiceSettlementAmount(invoice);
+  const totalAmount = Number(invoice.invoiceAmount || invoice.amountDue || 0);
   const tdsAmount = Number(invoice.tdsAmount || invoice.totalTDSAmount || 0);
   const netReceivable = totalAmount - tdsAmount;
 
@@ -582,7 +595,7 @@ const postSalesJournalForInvoice = async (invoiceId, userId, reqUser = {}) => {
   }
 
   for (const [label, taxAcc] of Object.entries(accounts.taxAccounts)) {
-    const taxEntry = invoice.taxSummary?.find(t => (t.label || t.taxType) === label) || {};
+    const taxEntry = accounts.taxSummary.find(t => (t.label || t.taxType) === label) || {};
     const amount = Number(taxEntry.amount || 0);
     if (amount <= 0) continue;
 
