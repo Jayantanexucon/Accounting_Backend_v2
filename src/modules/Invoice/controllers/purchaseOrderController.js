@@ -341,8 +341,18 @@ export const getAllPurchaseOrders = async (req, res, next) => {
       paymentTerms, 
       poNumber,
       clientName,
+      clientId,
+      vendorId,
       invoiceState,
       poStatus,
+      poDateFrom,
+      poDateTo,
+      createdDateFrom,
+      createdDateTo,
+      updatedDateFrom,
+      updatedDateTo,
+      deliveryDateFrom,
+      deliveryDateTo,
       limit = 1000,
       skip = 0
     } = req.query;
@@ -351,11 +361,12 @@ export const getAllPurchaseOrders = async (req, res, next) => {
       throw new AppError("companyId is required", 400, "getAllPurchaseOrders");
     }
 
+    const requestedStatus = poStatus || status;
     const filter = { companyId };
-    if (status) filter.status = status;
-    if (poStatus) filter.status = poStatus; // Accept both 'status' and 'poStatus'
     if (direction) filter.direction = direction;
     if (paymentTerms) filter.paymentTerms = paymentTerms;
+    if (clientId) filter["vendor._id"] = clientId;
+    if (vendorId) filter["vendor._id"] = vendorId;
 
     // PO Number search (partial match)
     if (poNumber) {
@@ -370,15 +381,45 @@ export const getAllPurchaseOrders = async (req, res, next) => {
       ];
     }
 
+    const addDateRangeFilter = (field, from, to) => {
+      if (!from && !to) return;
+      filter[field] = {};
+      if (from) filter[field].$gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        filter[field].$lte = end;
+      }
+    };
+
+    addDateRangeFilter("poDate", poDateFrom, poDateTo);
+    addDateRangeFilter("createdAt", createdDateFrom, createdDateTo);
+    addDateRangeFilter("updatedAt", updatedDateFrom, updatedDateTo);
+    addDateRangeFilter("deliveryDate", deliveryDateFrom, deliveryDateTo);
+
     // Invoice State filter (derived from totalAmount and totalInvoicedAmount)
     // This will be handled by filtering the results since it requires calculation
     
     const pos = await getPurchaseOrdersRepo(filter);
 
-    // Post-process for invoiceState filter if provided
+    const getDerivedStatus = (po = {}) => {
+      if (po.status === "CLOSED") return "CLOSED";
+      const totalAmount = Number(po.totalAmount || 0);
+      const totalInvoicedAmount = Number(po.totalInvoicedAmount || 0);
+      if (totalInvoicedAmount >= totalAmount && totalAmount > 0) return "FULLY_INVOICED";
+      if (totalInvoicedAmount > 0) return "PARTIALLY_INVOICED";
+      return "OPEN";
+    };
+
+    // Post-process status and invoiceState filters because the UI displays
+    // status derived from invoice progress, not only the stored PO status field.
     let filteredPos = pos;
+    if (requestedStatus) {
+      filteredPos = filteredPos.filter((po) => getDerivedStatus(po) === requestedStatus);
+    }
+
     if (invoiceState) {
-      filteredPos = pos.filter(po => {
+      filteredPos = filteredPos.filter(po => {
         const totalAmount = po.totalAmount || 0;
         const totalInvoicedAmount = po.totalInvoicedAmount || 0;
 
@@ -618,19 +659,27 @@ export const deletePurchaseOrder = async (req, res, next) => {
 
 export const getPurchaseOrderByNumber = async (req, res, next) => {
   try {
-    const { poNumber, q, companyId } = req.query;
+    const { poNumber, q, companyId, clientId, vendorId, clientName } = req.query;
     const searchTerm = poNumber || q;
 
-    if (!searchTerm || !companyId) {
-      throw new AppError("poNumber (or q) and companyId are required", 400, "getPurchaseOrderByNumber");
+    if (!companyId) {
+      throw new AppError("companyId is required", 400, "getPurchaseOrderByNumber");
     }
 
     // Search for PO numbers that match (partial match)
     const PurchaseOrder = await getPurchaseOrderModel();
-    const pos = await PurchaseOrder.find({
+    const filter = {
       companyId,
-      poNumber: { $regex: searchTerm, $options: "i" },
-    }).limit(20);
+    };
+
+    if (searchTerm) filter.poNumber = { $regex: searchTerm, $options: "i" };
+    if (clientId) filter["vendor._id"] = clientId;
+    if (vendorId) filter["vendor._id"] = vendorId;
+    if (clientName) filter["vendor.name"] = { $regex: clientName, $options: "i" };
+
+    const pos = await PurchaseOrder.find(filter)
+      .sort({ poDate: -1, createdAt: -1 })
+      .limit(20);
 
     // Return array of matching PO numbers with label format for dropdown
     const results = pos.map(po => ({
