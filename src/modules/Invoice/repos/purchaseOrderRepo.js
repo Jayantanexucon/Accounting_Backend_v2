@@ -1,4 +1,5 @@
 import AppError from "../../../utils/AppError.js";
+import { getInvoiceModel } from "../models/Invoice.js";
 import { getPurchaseOrderModel } from "../models/PurchaseOrder.js";
 import {
   buildTaxMeta,
@@ -273,5 +274,115 @@ export const updatePOInvoiceProgress = async (poId, invoiceAmount) => {
   } catch (error) {
     if (error.statusCode === 404) throw error;
     throw new AppError(error.message || "Failed to update PO invoice progress", 500, "updatePOInvoiceProgress");
+  }
+};
+
+const getInvoiceMilestoneAmount = (milestone = {}) => {
+  const taxableAmount = Number(milestone.invoicedAmount ?? milestone.amount ?? milestone.taxableValue ?? 0);
+  const taxAmount = Number(milestone.gstAmount ?? milestone.taxAmount ?? milestone.totalTaxAmount ?? 0);
+
+  return round2(
+    Number(
+      milestone.total ??
+        milestone.totalAmount ??
+        milestone.invoiceAmount ??
+        (taxableAmount + taxAmount)
+    )
+  );
+};
+
+const isInvoiceActiveForPO = (invoice = {}) => {
+  const status = String(invoice.status || "").toUpperCase();
+  return !["CANCELLED", "CANCELED", "VOID", "REVERSED"].includes(status);
+};
+
+const isInvoiceFullyPaid = (invoice = {}) => {
+  const status = String(invoice.status || "").toUpperCase();
+  if (["PAID", "RECONCILED"].includes(status) || invoice.isFullyPaid) return true;
+  return Number(invoice.remainingAmount || 0) <= 0.01 && Number(invoice.paidAmount || 0) > 0;
+};
+
+export const syncPurchaseOrderFromInvoicesRepo = async (poId, userId = "system") => {
+  try {
+    const PurchaseOrder = await getPurchaseOrderModel();
+    const Invoice = await getInvoiceModel();
+
+    const po = await PurchaseOrder.findById(poId);
+    if (!po) {
+      throw new AppError("Purchase Order not found", 404, "syncPurchaseOrderFromInvoicesRepo");
+    }
+
+    const invoices = await Invoice.find({ linkedPO: poId }).lean();
+    const activeInvoices = invoices.filter(isInvoiceActiveForPO);
+
+    const invoiceIds = activeInvoices.map((invoice) => invoice._id);
+    const totalInvoicedAmount = round2(
+      activeInvoices.reduce((sum, invoice) => sum + Number(invoice.invoiceAmount || 0), 0)
+    );
+    const totalPaidAmount = round2(
+      activeInvoices.reduce((sum, invoice) => sum + Number(invoice.paidAmount || 0), 0)
+    );
+
+    const milestones = Array.isArray(po.milestones)
+      ? po.milestones.map((milestone, index) => {
+          const milestoneId = String(milestone._id || milestone.milestoneId || "");
+          const milestoneTitle = String(milestone.title || "").trim().toLowerCase();
+
+          const invoicedAmount = round2(
+            activeInvoices.reduce((sum, invoice) => {
+              const invoiceMilestones = Array.isArray(invoice.milestones) ? invoice.milestones : [];
+              const byIdOrTitle = invoiceMilestones.filter((entry) => {
+                const entryId = String(entry.milestoneId || entry._id || "");
+                const entryTitle = String(entry.title || entry.description || "").trim().toLowerCase();
+                return (
+                  (milestoneId && entryId && milestoneId === entryId) ||
+                  (milestoneTitle && entryTitle && milestoneTitle === entryTitle)
+                );
+              });
+              const matched = byIdOrTitle.length > 0
+                ? byIdOrTitle
+                : invoiceMilestones.filter((entry) => {
+                    const entryIndex = Number(entry.milestoneIndex);
+                    return Number.isFinite(entryIndex) && entryIndex === index;
+                  });
+
+              return sum + matched.reduce((mSum, entry) => mSum + getInvoiceMilestoneAmount(entry), 0);
+            }, 0)
+          );
+
+          return {
+            ...milestone.toObject(),
+            invoicedAmount: Math.min(Number(milestone.amount || 0), invoicedAmount),
+          };
+        })
+      : [];
+
+    let status = "OPEN";
+    const poTotal = Number(po.totalAmount || 0);
+    const isFullyInvoiced = poTotal > 0 && totalInvoicedAmount >= poTotal - 0.01;
+    const allInvoicesPaid =
+      activeInvoices.length > 0 && activeInvoices.every(isInvoiceFullyPaid);
+
+    if (isFullyInvoiced && allInvoicesPaid) {
+      status = "CLOSED";
+    } else if (isFullyInvoiced) {
+      status = "FULLY_INVOICED";
+    } else if (totalInvoicedAmount > 0) {
+      status = "PARTIALLY_INVOICED";
+    }
+
+    po.invoiceIds = invoiceIds;
+    po.totalInvoicedAmount = totalInvoicedAmount;
+    po.totalPaidAmount = totalPaidAmount;
+    po.remainingInvoicableAmount = Math.max(0, round2(poTotal - totalInvoicedAmount));
+    po.status = status;
+    po.milestones = milestones;
+    po.updatedBy = userId;
+
+    await po.save();
+    return po;
+  } catch (error) {
+    if (error.statusCode === 404) throw error;
+    throw new AppError(error.message || "Failed to sync PO invoice progress", 500, "syncPurchaseOrderFromInvoicesRepo");
   }
 };

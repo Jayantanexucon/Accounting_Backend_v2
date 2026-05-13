@@ -3,6 +3,7 @@ import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
 import { getInvoiceByIdRepo, updateInvoiceRepo, getInvoicesWithTDSRepo } from "../repos/invoiceRepo.js";
+import { syncPurchaseOrderFromInvoicesRepo } from "../repos/purchaseOrderRepo.js";
 import { getPaymentsByInvoiceRepo, createPaymentRepo, getDetailedTDSReportRepo } from "../../Account/repos/paymentRepo.js";
 import { createJournalRepo, getJournalByIdRepo } from "../../Account/repos/journalRepo.js";
 import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
@@ -923,6 +924,10 @@ export const recordPaymentForInvoice = async ({
     description: `Payment posted for invoice ${invoice.invoiceNo}`,
   });
 
+  if (invoice.linkedPO) {
+    await syncPurchaseOrderFromInvoicesRepo(invoice.linkedPO, userId);
+  }
+
   return {
     payment: paymentRecord,
     journal: paymentJournal,
@@ -1351,6 +1356,10 @@ export const reverseInvoicePayment = async (req, res, next) => {
       paymentIds: updatedPaymentIds,
       updatedBy: userId,
     });
+
+    if (invoice.linkedPO) {
+      await syncPurchaseOrderFromInvoicesRepo(invoice.linkedPO, userId);
+    }
 
     await createAuditLog({
       companyId: normalizeCompanyId(companyId),

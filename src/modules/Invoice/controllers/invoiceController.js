@@ -22,7 +22,7 @@ import {
 import { createJournalRepo } from "../../Account/repos/journalRepo.js";
 import { getAccountsRepo } from "../../Account/repos/accountRepo.js";
 import { createMultipleJournalLinesRepo } from "../../Account/repos/journalLineRepo.js";
-import { getPurchaseOrderByIdRepo, updatePurchaseOrderRepo } from "../repos/purchaseOrderRepo.js";
+import { getPurchaseOrderByIdRepo, syncPurchaseOrderFromInvoicesRepo } from "../repos/purchaseOrderRepo.js";
 import { findCompanyByIdRepo } from "../../company/repos/companyRepo.js";
 import { exportInvoice, exportInvoiceList, prepareInvoiceData } from "../services/invoiceExportService.js";
 import {
@@ -312,6 +312,10 @@ export const createInvoice = async (req, res, next) => {
       tdsAmount: bodyTDS,
       netPayable: bodyNetPayable,
       valueInWords: bodyValueInWords,
+      milestones,
+      deliveryMilestones,
+      contractWorklog,
+      paymentSchedules,
     } = req.body;
 
     if (!invoiceDate || !dueDate || !billTo || !shipTo || !items || items.length === 0 || !companyId) {
@@ -373,6 +377,33 @@ export const createInvoice = async (req, res, next) => {
     });
 
     const invoiceNumber = await generateInvoiceNumber(companyId);
+    const normalizedMilestones = Array.isArray(milestones)
+      ? milestones.map((milestone, index) => ({
+        ...milestone,
+        milestoneId: milestone.milestoneId || milestone._id,
+        milestoneIndex: Number(milestone.milestoneIndex ?? index),
+        milestoneNo: Number(
+          milestone.milestoneNo ??
+          (Number(milestone.milestoneIndex ?? index) + 1)
+        ),
+        description: milestone.description || milestone.title || `Milestone ${index + 1}`,
+        targetAmount: Number(
+          milestone.targetAmount ??
+          milestone.originalAmount ??
+          milestone.remainingAmountBefore ??
+          milestone.amount ??
+          0
+        ),
+        invoiceAmount: Number(
+          milestone.invoiceAmount ??
+          milestone.invoicedAmount ??
+          milestone.amount ??
+          0
+        ),
+        amount: Number(milestone.amount ?? milestone.invoiceAmount ?? 0),
+        invoicedAmount: Number(milestone.invoicedAmount ?? milestone.invoiceAmount ?? milestone.amount ?? 0),
+      }))
+      : [];
 
     const invoiceData = {
       companyId,
@@ -399,6 +430,10 @@ export const createInvoice = async (req, res, next) => {
       remainingAmount: bodyInvoiceAmount ?? round2(invoiceAmount),
       tdsAmount: bodyTDS || 0,
       valueInWords: bodyValueInWords || `${invoiceAmount} only`,
+      milestones: normalizedMilestones,
+      deliveryMilestones: Array.isArray(deliveryMilestones) ? deliveryMilestones : [],
+      contractWorklog: Array.isArray(contractWorklog) ? contractWorklog : [],
+      paymentSchedules: Array.isArray(paymentSchedules) ? paymentSchedules : [],
       notes,
       actionType: "create",
       createdBy: req.user?.id,
@@ -409,12 +444,7 @@ export const createInvoice = async (req, res, next) => {
 
     // If linked to PO, update PO with invoice reference
     if (linkedPO) {
-      const po = await getPurchaseOrderByIdRepo(linkedPO);
-      await updatePurchaseOrderRepo(linkedPO, {
-        invoiceIds: [...(po.invoiceIds || []), invoice._id],
-        totalInvoicedAmount: (po.totalInvoicedAmount || 0) + invoiceAmount,
-        updatedBy: req.user?.id,
-      });
+      await syncPurchaseOrderFromInvoicesRepo(linkedPO, req.user?.id);
     }
 
     await createAuditLog({
@@ -606,6 +636,15 @@ export const updateInvoice = async (req, res, next) => {
       updatedBy: req.user?.id,
     });
 
+    const poIdsToSync = new Set(
+      [oldInvoice?.linkedPO, updatedInvoice?.linkedPO]
+        .filter(Boolean)
+        .map((poId) => String(poId?._id || poId))
+    );
+    for (const poId of poIdsToSync) {
+      await syncPurchaseOrderFromInvoicesRepo(poId, req.user?.id);
+    }
+
     await createAuditLog({
       companyId: oldInvoice.companyId,
       entityType: "Invoice",
@@ -643,14 +682,7 @@ export const deleteInvoice = async (req, res, next) => {
 
     // Update PO to remove invoice reference
     if (invoice.linkedPO) {
-      const po = await getPurchaseOrderByIdRepo(invoice.linkedPO);
-      const invoiceIds = po.invoiceIds.filter((id) => id.toString() !== invoice._id.toString());
-      await updatePurchaseOrderRepo(invoice.linkedPO, {
-        invoiceIds,
-        totalInvoicedAmount:
-          Math.max(0, (po.totalInvoicedAmount || 0) - invoice.invoiceAmount) || 0,
-        updatedBy: req.user?.id,
-      });
+      await syncPurchaseOrderFromInvoicesRepo(invoice.linkedPO, req.user?.id);
     }
 
     await createAuditLog({
@@ -1136,6 +1168,9 @@ export const createInvoiceWithJournal = async (req, res, next) => {
 
       // Get the created invoice
       const createdInvoice = await getInvoiceByIdRepo(result.executedSteps[0].result._id);
+      if (linkedPO) {
+        await syncPurchaseOrderFromInvoicesRepo(linkedPO, req.user?.id);
+      }
 
       // Audit log for transaction
       await createAuditLog({
@@ -1165,12 +1200,7 @@ export const createInvoiceWithJournal = async (req, res, next) => {
 
       // Update PO if linked
       if (linkedPO) {
-        const po = await getPurchaseOrderByIdRepo(linkedPO);
-        await updatePurchaseOrderRepo(linkedPO, {
-          invoiceIds: [...(po.invoiceIds || []), invoice._id],
-          totalInvoicedAmount: (po.totalInvoicedAmount || 0) + invoiceAmount,
-          updatedBy: req.user?.id,
-        });
+        await syncPurchaseOrderFromInvoicesRepo(linkedPO, req.user?.id);
       }
 
       await createAuditLog({
