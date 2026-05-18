@@ -12,12 +12,18 @@ import {
   getPOsByStatus,
   downloadWordPurchaseOrder,
   downloadPdfPurchaseOrder,
+  getPendingApprovals,
+  updatePurchaseOrderApproval,
 } from "../controllers/purchaseOrderController.js";
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(protect);
+
+// Approvals
+router.get("/approvals/pending", checkPermission("PURCHASE_ORDER", "VIEW"), getPendingApprovals);
+router.put("/approvals/update/:id", checkPermission("PURCHASE_ORDER", "EDIT"), updatePurchaseOrderApproval);
 
 // Create PO
 router.post("/", checkPermission("PURCHASE_ORDER", "CREATE"), createPurchaseOrder);
