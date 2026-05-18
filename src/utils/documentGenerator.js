@@ -5,8 +5,11 @@ import mammoth from "mammoth";
 import { PDFDocument, rgb } from "pdf-lib";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 
-const TEMPLATES_DIR = path.join(process.cwd(), "Templates");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const TEMPLATES_DIR = path.join(__dirname, "../../Templates");
 
 /**
  * Format date to DD/MM/YYYY
