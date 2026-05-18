@@ -298,6 +298,10 @@ export const createPurchaseOrder = async (req, res, next) => {
       notes,
       withSignature: withSignature || false,
 
+      // Approval fields
+      approvalStatus: "Pending",
+      actionType: "create",
+
       ...(poreferencevalue && { poreferencevalue }),
       ...(paymentSchedule && { paymentSchedule }),
       ...(staffingConfig && { staffingConfig }),
@@ -583,6 +587,8 @@ export const updatePurchaseOrder = async (req, res, next) => {
 
     const updatedPO = await updatePurchaseOrderRepo(id, {
       ...updateData,
+      approvalStatus: "Pending",
+      actionType: "update",
       updatedBy: req.user?.id ? String(req.user.id) : undefined,
     });
 
@@ -632,25 +638,29 @@ export const deletePurchaseOrder = async (req, res, next) => {
 
     const po = await getPurchaseOrderByIdRepo(id);
 
-    await deletePurchaseOrderRepo(id);
+    await updatePurchaseOrderRepo(id, {
+      approvalStatus: "Pending",
+      actionType: "delete",
+      updatedBy: req.user?.id ? String(req.user.id) : undefined,
+    });
 
     await createAuditLog({
       companyId: po.companyId,
       entityType: "PurchaseOrder",
       entityId: id,
-      action: "DELETE",
+      action: "DELETE_REQUEST",
       userId: req.user?.id,
       userEmail: req.user?.email,
       userRole: req.user?.role,
       changes: [],
       oldValues: po,
-      description: `Purchase Order deleted: ${po.poNumber}`,
+      description: `Purchase Order deletion requested: ${po.poNumber}`,
     });
 
     new ApiResponse({
       statusCode: 200,
       data: null,
-      message: "Purchase Order deleted successfully",
+      message: "Purchase Order deletion requested successfully",
     }).send(res);
   } catch (error) {
     next(error);
@@ -859,3 +869,113 @@ export const downloadPdfPurchaseOrder = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getPendingApprovals = async (req, res, next) => {
+  try {
+    const { companyId } = req.query;
+    if (!companyId) {
+      throw new AppError("companyId is required", 400, "getPendingApprovals");
+    }
+    const PurchaseOrder = await getPurchaseOrderModel();
+    const pos = await PurchaseOrder.find({ companyId, approvalStatus: "Pending" })
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    new ApiResponse({
+      statusCode: 200,
+      data: pos.map(po => ({ ...po, client: po.vendor })),
+      message: "Pending Purchase Orders retrieved successfully",
+    }).send(res);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updatePurchaseOrderApproval = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { approvalStatus, approvalComments } = req.body;
+
+    if (!id) {
+      throw new AppError("Purchase Order ID is required", 400, "updatePurchaseOrderApproval");
+    }
+
+    const po = await getPurchaseOrderByIdRepo(id);
+
+    if (approvalStatus === "Approved") {
+      if (po.actionType === "delete") {
+        await deletePurchaseOrderRepo(id);
+
+        await createAuditLog({
+          companyId: po.companyId,
+          entityType: "PurchaseOrder",
+          entityId: id,
+          action: "DELETE",
+          userId: req.user?.id,
+          userEmail: req.user?.email,
+          userRole: req.user?.role,
+          description: `Purchase Order deleted: ${po.poNumber}`,
+        });
+
+        return new ApiResponse({
+          statusCode: 200,
+          data: null,
+          message: "Purchase Order deleted successfully",
+        }).send(res);
+      } else {
+        const updatedPO = await updatePurchaseOrderRepo(id, {
+          approvalStatus: "Approved",
+          approvedBy: req.user?.id ? String(req.user.id) : undefined,
+          approvalDate: new Date(),
+          approvalComments,
+        });
+
+        await createAuditLog({
+          companyId: po.companyId,
+          entityType: "PurchaseOrder",
+          entityId: id,
+          action: po.actionType === "create" ? "CREATE_APPROVE" : "UPDATE_APPROVE",
+          userId: req.user?.id,
+          userEmail: req.user?.email,
+          userRole: req.user?.role,
+          description: `Purchase Order approved: ${po.poNumber}`,
+        });
+
+        return new ApiResponse({
+          statusCode: 200,
+          data: updatedPO,
+          message: "Purchase Order approved successfully",
+        }).send(res);
+      }
+    } else if (approvalStatus === "Rejected") {
+      const updatedPO = await updatePurchaseOrderRepo(id, {
+        approvalStatus: "Rejected",
+        approvedBy: req.user?.id ? String(req.user.id) : undefined,
+        approvalDate: new Date(),
+        approvalComments,
+      });
+
+      await createAuditLog({
+        companyId: po.companyId,
+        entityType: "PurchaseOrder",
+        entityId: id,
+        action: "REJECT",
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        userRole: req.user?.role,
+        description: `Purchase Order rejected: ${po.poNumber}`,
+      });
+
+      return new ApiResponse({
+        statusCode: 200,
+        data: updatedPO,
+        message: "Purchase Order rejected successfully",
+      }).send(res);
+    } else {
+      throw new AppError("Invalid approvalStatus", 400, "updatePurchaseOrderApproval");
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+

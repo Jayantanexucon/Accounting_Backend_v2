@@ -212,6 +212,21 @@ const purchaseOrderSchema = new mongoose.Schema(
     notes: { type: String },
     withSignature: { type: Boolean, default: false },
 
+    // Approval
+    approvalStatus: {
+      type: String,
+      enum: ["Pending", "Approved", "Rejected"],
+      default: "Pending",
+    },
+    approvedBy: { type: String }, // Stored as string to match createdBy/updatedBy
+    approvalDate: { type: Date },
+    approvalComments: { type: String },
+    actionType: {
+      type: String,
+      enum: ["create", "update", "delete"],
+      default: "create",
+    },
+
     // Stored as String — User lives in a different DB, no ObjectId ref
     createdBy: { type: String },
     updatedBy: { type: String },
