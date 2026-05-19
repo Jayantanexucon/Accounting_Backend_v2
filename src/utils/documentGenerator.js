@@ -54,11 +54,6 @@ export const generateWordDocument = async (templateName, data) => {
   }
 };
 
-/**
- * Generate PDF document from Word document
- * @param {Buffer} wordBuffer - Word document buffer
- * @returns {Promise<Buffer>} - PDF document buffer
- */
 export const generatePdfFromWord = async (wordBuffer) => {
   try {
     const pdfBuffer = await new Promise((resolve, reject) => {
@@ -69,41 +64,8 @@ export const generatePdfFromWord = async (wordBuffer) => {
     });
     return pdfBuffer;
   } catch (error) {
-    console.error("LibreOffice conversion failed, using fallback method:", error);
-    // Fallback: Convert Word to HTML then create simple PDF
-    return generatePdfFallback(wordBuffer);
-  }
-};
-
-/**
- * Fallback PDF generation using mammoth and pdf-lib
- * @param {Buffer} wordBuffer - Word document buffer
- * @returns {Promise<Buffer>} - PDF document buffer
- */
-export const generatePdfFallback = async (wordBuffer) => {
-  try {
-    // Convert Word to HTML
-    const htmlResult = await mammoth.convertToHtml({ buffer: wordBuffer });
-    const html = htmlResult.value;
-
-    // Create PDF with pdf-lib
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([595, 842]); // A4 size
-
-    // Add simple content
-    const { height } = page.getSize();
-    page.drawText("Document generated from template", {
-      x: 50,
-      y: height - 50,
-      size: 12,
-      color: rgb(0, 0, 0),
-    });
-
-    const pdfBytes = await pdfDoc.save();
-    return Buffer.from(pdfBytes);
-  } catch (error) {
-    console.error("Fallback PDF generation failed:", error);
-    throw error;
+    console.error("LibreOffice conversion failed. LibreOffice is likely not installed on the system path.", error);
+    throw new Error("PDF conversion failed: LibreOffice is required on the server to generate PDFs from Word templates.");
   }
 };
 
