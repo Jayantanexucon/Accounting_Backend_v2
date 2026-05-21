@@ -16,6 +16,7 @@ import invoiceRoutes from "./modules/Invoice/routers/invoiceAggregator.js";
 import invoiceAccountingRoutes from "./modules/Invoice/routers/invoiceAccountingRoutes.js";
 import auditRoutes from "./modules/audit/routes.js";
 import systemRoutes from "./routes/systemRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -107,6 +108,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/masterData", masterDataRoutes);
 app.use("/api/audit-logs", auditRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 /**
  * Register module-specific routes based on connected databases

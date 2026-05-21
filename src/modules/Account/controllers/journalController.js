@@ -25,6 +25,7 @@ import { getAccountsRepo } from "../repos/accountRepo.js";
 import { getJournalModel } from "../models/Journal.js";
 import { getPaymentModel } from "../models/Payment.js";
 import { getInvoiceByIdRepo, updateInvoiceRepo } from "../../Invoice/repos/invoiceRepo.js";
+import { notifyCompanyAdmins, emitNotification } from "../../../utils/notificationEmitter.js";
 
 
 const VALID_VOUCHER_TYPES = ["SALES", "PURCHASE", "PAYMENT", "RECEIPT", "CONTRA", "JOURNAL"];
@@ -302,6 +303,20 @@ export const createJournal = async (req, res, next) => {
     });
 
     const createdJournal = await getJournalByIdRepo(journal._id);
+    
+    // IN-APP NOTIFICATION: Notify company admins about new journal
+    const userName = req.user?.name || "System User";
+    notifyCompanyAdmins({
+      companyId: companyId,
+      title: "New Journal Created",
+      message: `Journal ${journal.number} has been created by ${userName} and is pending approval.`,
+      type: "APPROVAL_REQUEST",
+      relatedEntity: {
+        entityType: "JOURNAL",
+        entityId: journal._id.toString()
+      },
+      senderName: userName
+    });
 
     new ApiResponse({
       statusCode: 201,
@@ -474,6 +489,23 @@ export const approveJournal = async (req, res, next) => {
       changes: updateData,
       companyId: journal.companyId,
     });
+    
+    // IN-APP NOTIFICATION: Notify the original creator
+    const userName = req.user?.name || "System User";
+    if (journal.createdBy) {
+      emitNotification({
+        companyId: journal.companyId,
+        recipientId: journal.createdBy.toString(),
+        title: "Journal Approved",
+        message: `Your journal ${journal.number} has been approved by ${userName}.`,
+        type: "APPROVED",
+        relatedEntity: {
+          entityType: "JOURNAL",
+          entityId: journal._id.toString()
+        },
+        senderName: userName
+      });
+    }
 
     new ApiResponse({
       statusCode: 200,
@@ -514,6 +546,23 @@ export const rejectJournal = async (req, res, next) => {
       changes: updateData,
       companyId: journal.companyId,
     });
+    
+    // IN-APP NOTIFICATION: Notify the original creator
+    const userName = req.user?.name || "System User";
+    if (journal.createdBy) {
+      emitNotification({
+        companyId: journal.companyId,
+        recipientId: journal.createdBy.toString(),
+        title: "Journal Rejected",
+        message: `Your journal ${journal.number} has been rejected by ${userName}. Reason: ${approvalComments}`,
+        type: "REJECTED",
+        relatedEntity: {
+          entityType: "JOURNAL",
+          entityId: journal._id.toString()
+        },
+        senderName: userName
+      });
+    }
 
     new ApiResponse({
       statusCode: 200,
@@ -593,6 +642,20 @@ export const requestJournalEditApproval = async (req, res, next) => {
       requestComment,
       requestedPayload: req.body,
     });
+    
+    // IN-APP NOTIFICATION: Notify company admins about edit request
+    const userName = req.user?.name || "System User";
+    notifyCompanyAdmins({
+      companyId: companyId,
+      title: "Journal Edit Request",
+      message: `User ${userName} has requested to edit Journal ${journal.number}.`,
+      type: "APPROVAL_REQUEST",
+      relatedEntity: {
+        entityType: "JOURNAL",
+        entityId: journal._id.toString()
+      },
+      senderName: userName
+    });
 
     new ApiResponse({
       statusCode: 201,
@@ -631,6 +694,20 @@ export const requestJournalDeleteApproval = async (req, res, next) => {
       requestedBy: req.user?.id,
       requestComment,
       requestedPayload: null,
+    });
+    
+    // IN-APP NOTIFICATION: Notify company admins about delete request
+    const userName = req.user?.name || "System User";
+    notifyCompanyAdmins({
+      companyId: companyId,
+      title: "Journal Delete Request",
+      message: `User ${userName} has requested to delete Journal ${journal.number}.`,
+      type: "APPROVAL_REQUEST",
+      relatedEntity: {
+        entityType: "JOURNAL",
+        entityId: journal._id.toString()
+      },
+      senderName: userName
     });
 
     new ApiResponse({

@@ -1,8 +1,10 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import { createServer } from "http";
 import app, { initializeDatabases, registerModuleRoutes, registerErrorHandlers } from "./app.js";
 import { configurePassport } from "./config/passport.js";
+import { initializeSocket } from "./utils/socketHandler.js";
 
 const PORT = process.env.PORT || 8080;
 
@@ -20,7 +22,10 @@ const startServer = async () => {
     // ✅ Register error handlers AFTER all routes are registered
     registerErrorHandlers();
     
-    app.listen(PORT, () => {
+    const httpServer = createServer(app);
+    initializeSocket(httpServer);
+
+    httpServer.listen(PORT, () => {
       console.log(`✅ Server running on port ${PORT}`);
     });
   } catch (error) {
