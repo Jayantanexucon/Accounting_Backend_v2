@@ -1,6 +1,7 @@
 import ApiResponse from "../../../utils/ApiResponse.js";
 import AppError from "../../../utils/AppError.js";
 import { createAuditLog } from "../../../utils/createAuditLog.js";
+import { notifyCompanyAdmins, emitNotification } from "../../../utils/notificationEmitter.js";
 import {
   generateWordDocument,
   generatePdfFromWord,
@@ -326,6 +327,19 @@ export const createPurchaseOrder = async (req, res, next) => {
       description: `Purchase Order created: ${po.poNumber}`,
     });
 
+    // Notify company admins about new PO
+    notifyCompanyAdmins({
+      companyId: companyId,
+      title: "New Purchase Order Created",
+      message: `Purchase Order ${po.poNumber} has been created and is pending approval.`,
+      type: "APPROVAL_REQUEST",
+      relatedEntity: {
+        entityType: "PO",
+        entityId: po._id.toString()
+      },
+      senderName: req.user?.name || "System User"
+    });
+
     new ApiResponse({
       statusCode: 201,
       data: po,
@@ -587,7 +601,7 @@ export const updatePurchaseOrder = async (req, res, next) => {
 
     const updatedPO = await updatePurchaseOrderRepo(id, {
       ...updateData,
-      approvalStatus: "Pending",
+      approvalStatus: updateData.approvalStatus || "Pending",
       actionType: "update",
       updatedBy: req.user?.id ? String(req.user.id) : undefined,
     });
@@ -617,6 +631,24 @@ export const updatePurchaseOrder = async (req, res, next) => {
       newValues: updatedPO,
       description: `Purchase Order updated: ${oldPO.poNumber}`,
     });
+
+    // Handle approval notification if status changed
+    if (updateData.approvalStatus && updateData.approvalStatus !== oldPO.approvalStatus) {
+      if (oldPO.createdBy) {
+        emitNotification({
+          companyId: oldPO.companyId,
+          recipientId: oldPO.createdBy.toString(),
+          title: `Purchase Order ${updateData.approvalStatus}`,
+          message: `Your purchase order ${oldPO.poNumber} has been ${updateData.approvalStatus.toLowerCase()}.`,
+          type: updateData.approvalStatus.toUpperCase(),
+          relatedEntity: {
+            entityType: "PO",
+            entityId: id.toString()
+          },
+          senderName: req.user?.name || "System User"
+        });
+      }
+    }
 
     new ApiResponse({
       statusCode: 200,

@@ -36,6 +36,7 @@ import {
   sendInvoiceRejectedNotification,
   sendPaymentRecordedNotification,
 } from "../services/notificationService.js";
+import { notifyCompanyAdmins, emitNotification } from "../../../utils/notificationEmitter.js";
 import {
   buildTaxMeta,
   normalizeLineItemTax,
@@ -458,6 +459,20 @@ export const createInvoice = async (req, res, next) => {
       changes: invoiceData,
       description: `Invoice created: ${invoice.invoiceNo}`,
     });
+    
+    // IN-APP NOTIFICATION: Notify company admins about new invoice
+    const userName = req.user?.name || "System User";
+    notifyCompanyAdmins({
+      companyId: invoiceData.companyId,
+      title: "New Invoice Created",
+      message: `Invoice ${invoice.invoiceNo} has been created by ${userName} and is pending approval.`,
+      type: "APPROVAL_REQUEST",
+      relatedEntity: {
+        entityType: "INVOICE",
+        entityId: invoice._id.toString()
+      },
+      senderName: userName
+    });
 
     new ApiResponse({
       statusCode: 201,
@@ -839,6 +854,23 @@ export const approveInvoice = async (req, res, next) => {
       changes: updateData,
       description: `Invoice approved: ${invoice.invoiceNo}`,
     });
+    
+    // IN-APP NOTIFICATION: Notify the original creator
+    const userName = req.user?.name || "System User";
+    if (invoice.createdBy) {
+      emitNotification({
+        companyId: req.companyId,
+        recipientId: invoice.createdBy.toString(),
+        title: "Invoice Approved",
+        message: `Your invoice ${invoice.invoiceNo} has been approved by ${userName}.`,
+        type: "APPROVED",
+        relatedEntity: {
+          entityType: "INVOICE",
+          entityId: invoice._id.toString()
+        },
+        senderName: userName
+      });
+    }
 
     new ApiResponse({
       statusCode: 200,
@@ -883,6 +915,23 @@ export const rejectInvoice = async (req, res, next) => {
       changes: updateData,
       description: `Invoice rejected: ${invoice.invoiceNo}`,
     });
+    
+    // IN-APP NOTIFICATION: Notify the original creator
+    const userName = req.user?.name || "System User";
+    if (invoice.createdBy) {
+      emitNotification({
+        companyId: req.companyId,
+        recipientId: invoice.createdBy.toString(),
+        title: "Invoice Rejected",
+        message: `Your invoice ${invoice.invoiceNo} has been rejected by ${userName}. Reason: ${approvalComments}`,
+        type: "REJECTED",
+        relatedEntity: {
+          entityType: "INVOICE",
+          entityId: invoice._id.toString()
+        },
+        senderName: userName
+      });
+    }
 
     new ApiResponse({
       statusCode: 200,

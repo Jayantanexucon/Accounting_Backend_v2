@@ -32,6 +32,7 @@
     "pdfkit": "^0.13.0",
     "pizzip": "^3.2.0",
     "pug": "^3.0.3",
+    "socket.io": "^4.8.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
