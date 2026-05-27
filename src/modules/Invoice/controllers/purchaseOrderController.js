@@ -134,6 +134,18 @@ const getPoGstSplit = (company = {}, vendor = {}, deliverTo = {}) => {
   );
 };
 
+const toPlainObject = (doc) => JSON.parse(JSON.stringify(doc || {}));
+
+const getChangedFields = (oldDoc = {}, nextData = {}) =>
+  Object.keys(nextData)
+    .filter((key) => !["updateHistory", "approvalHistory", "rejectionHistory"].includes(key))
+    .filter((key) => JSON.stringify(oldDoc?.[key]) !== JSON.stringify(nextData?.[key]))
+    .map((key) => ({
+      field: key,
+      oldValue: oldDoc?.[key],
+      newValue: nextData?.[key],
+    }));
+
 export const createPurchaseOrder = async (req, res, next) => {
   try {
     const {
@@ -355,6 +367,7 @@ export const getAllPurchaseOrders = async (req, res, next) => {
     const { 
       companyId, 
       status, 
+      approvalStatus,
       direction, 
       paymentTerms, 
       poNumber,
@@ -381,6 +394,7 @@ export const getAllPurchaseOrders = async (req, res, next) => {
 
     const requestedStatus = poStatus || status;
     const filter = { companyId };
+    if (approvalStatus) filter.approvalStatus = approvalStatus;
     if (direction) filter.direction = direction;
     if (paymentTerms) filter.paymentTerms = paymentTerms;
     if (clientId) filter["vendor._id"] = clientId;
@@ -599,25 +613,42 @@ export const updatePurchaseOrder = async (req, res, next) => {
       updateData.totalIGSTAmount = taxMeta.totalIGSTAmount;
     }
 
+    const changes = getChangedFields(oldPO, updateData);
     const updatedPO = await updatePurchaseOrderRepo(id, {
       ...updateData,
       approvalStatus: updateData.approvalStatus || "Pending",
+      approvedBy: null,
+      approvalDate: null,
+      rejectionReason: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      updateHistory: [
+        ...(oldPO.updateHistory || []),
+        {
+          snapshot: toPlainObject(oldPO),
+          changes,
+          updatedBy: req.user?.id ? String(req.user.id) : undefined,
+          updatedAt: new Date(),
+        },
+      ],
+      approvalHistory: [
+        ...(oldPO.approvalHistory || []),
+        {
+          status: "Pending",
+          action: oldPO.approvalStatus === "Rejected" ? "RESUBMIT" : "UPDATE_SUBMIT",
+          comments:
+            oldPO.approvalStatus === "Rejected"
+              ? "Rejected purchase order edited and resubmitted for approval"
+              : "Purchase order update submitted for approval",
+          performedBy: req.user?.id ? String(req.user.id) : undefined,
+          performedAt: new Date(),
+        },
+      ],
       actionType: "update",
       updatedBy: req.user?.id ? String(req.user.id) : undefined,
     });
 
     // Compute changes for audit log
-    const changes = [];
-    Object.keys(updateData).forEach(key => {
-      if (JSON.stringify(oldPO[key]) !== JSON.stringify(updateData[key])) {
-        changes.push({
-          field: key,
-          oldValue: oldPO[key],
-          newValue: updateData[key],
-        });
-      }
-    });
-
     await createAuditLog({
       companyId: oldPO.companyId,
       entityType: "PurchaseOrder",
@@ -712,6 +743,7 @@ export const getPurchaseOrderByNumber = async (req, res, next) => {
     const PurchaseOrder = await getPurchaseOrderModel();
     const filter = {
       companyId,
+      approvalStatus: "Approved",
     };
 
     if (searchTerm) filter.poNumber = { $regex: searchTerm, $options: "i" };
@@ -847,6 +879,9 @@ export const downloadWordPurchaseOrder = async (req, res, next) => {
     if (!purchaseOrder) {
       throw new AppError("Purchase Order not found", 404, "downloadWordPurchaseOrder");
     }
+    if (purchaseOrder.approvalStatus !== "Approved") {
+      throw new AppError("Only approved purchase orders can be downloaded", 400, "downloadWordPurchaseOrder");
+    }
 
     const templateName = purchaseOrder.withSignature
       ? "PurchaseOrder-Template With Signature.docx"
@@ -881,6 +916,9 @@ export const downloadPdfPurchaseOrder = async (req, res, next) => {
 
     if (!purchaseOrder) {
       throw new AppError("Purchase Order not found", 404, "downloadPdfPurchaseOrder");
+    }
+    if (purchaseOrder.approvalStatus !== "Approved") {
+      throw new AppError("Only approved purchase orders can be downloaded", 400, "downloadPdfPurchaseOrder");
     }
 
     const templateName = purchaseOrder.withSignature
@@ -960,6 +998,19 @@ export const updatePurchaseOrderApproval = async (req, res, next) => {
           approvedBy: req.user?.id ? String(req.user.id) : undefined,
           approvalDate: new Date(),
           approvalComments,
+          rejectionReason: null,
+          rejectedBy: null,
+          rejectedAt: null,
+          approvalHistory: [
+            ...(po.approvalHistory || []),
+            {
+              status: "Approved",
+              action: "APPROVE",
+              comments: approvalComments,
+              performedBy: req.user?.id ? String(req.user.id) : undefined,
+              performedAt: new Date(),
+            },
+          ],
         });
 
         await createAuditLog({
@@ -980,11 +1031,41 @@ export const updatePurchaseOrderApproval = async (req, res, next) => {
         }).send(res);
       }
     } else if (approvalStatus === "Rejected") {
+      const reason = String(approvalComments || req.body.rejectionReason || "").trim();
+      if (!reason) {
+        throw new AppError("Rejection reason is required", 400, "updatePurchaseOrderApproval");
+      }
+
       const updatedPO = await updatePurchaseOrderRepo(id, {
         approvalStatus: "Rejected",
         approvedBy: req.user?.id ? String(req.user.id) : undefined,
         approvalDate: new Date(),
-        approvalComments,
+        approvalComments: reason,
+        rejectionReason: reason,
+        rejectedBy: req.user?.id ? String(req.user.id) : undefined,
+        rejectedAt: new Date(),
+        approvalHistory: [
+          ...(po.approvalHistory || []),
+          {
+            status: "Rejected",
+            action: "REJECT",
+            reason,
+            comments: reason,
+            performedBy: req.user?.id ? String(req.user.id) : undefined,
+            performedAt: new Date(),
+          },
+        ],
+        rejectionHistory: [
+          ...(po.rejectionHistory || []),
+          {
+            status: "Rejected",
+            action: "REJECT",
+            reason,
+            comments: reason,
+            performedBy: req.user?.id ? String(req.user.id) : undefined,
+            performedAt: new Date(),
+          },
+        ],
       });
 
       await createAuditLog({
@@ -1010,4 +1091,3 @@ export const updatePurchaseOrderApproval = async (req, res, next) => {
     next(error);
   }
 };
-

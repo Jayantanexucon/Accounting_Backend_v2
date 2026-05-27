@@ -132,6 +132,28 @@ const attendanceRecordSchema = new mongoose.Schema(
   }
 );
 
+const workflowHistorySchema = new mongoose.Schema(
+  {
+    status: { type: String },
+    action: { type: String },
+    reason: { type: String },
+    comments: { type: String },
+    performedBy: { type: String },
+    performedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const updateHistorySchema = new mongoose.Schema(
+  {
+    snapshot: { type: mongoose.Schema.Types.Mixed },
+    changes: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    updatedBy: { type: String },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 // ─── Main Purchase Order Schema ──────────────────────────────────
 const purchaseOrderSchema = new mongoose.Schema(
   {
@@ -221,6 +243,12 @@ const purchaseOrderSchema = new mongoose.Schema(
     approvedBy: { type: String }, // Stored as string to match createdBy/updatedBy
     approvalDate: { type: Date },
     approvalComments: { type: String },
+    rejectionReason: { type: String },
+    rejectedBy: { type: String },
+    rejectedAt: { type: Date },
+    rejectionHistory: { type: [workflowHistorySchema], default: [] },
+    approvalHistory: { type: [workflowHistorySchema], default: [] },
+    updateHistory: { type: [updateHistorySchema], default: [] },
     actionType: {
       type: String,
       enum: ["create", "update", "delete"],

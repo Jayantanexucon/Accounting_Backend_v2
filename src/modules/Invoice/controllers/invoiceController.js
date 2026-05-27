@@ -46,6 +46,18 @@ import { postSalesJournalForInvoice } from "./invoiceAccountingController.js";
 
 const toMongoId = (value) => value?._id || value || null;
 
+const toPlainObject = (doc) => JSON.parse(JSON.stringify(doc || {}));
+
+const getChangedFields = (oldDoc = {}, nextData = {}) =>
+  Object.keys(nextData)
+    .filter((key) => !["updateHistory", "approvalHistory", "rejectionHistory"].includes(key))
+    .filter((key) => JSON.stringify(oldDoc?.[key]) !== JSON.stringify(nextData?.[key]))
+    .map((key) => ({
+      field: key,
+      oldValue: oldDoc?.[key],
+      newValue: nextData?.[key],
+    }));
+
 const generateInvoiceNumber = async (companyId) => {
   const timestamp = Date.now();
   return `INV-${companyId.toString().slice(-4)}-${timestamp}`;
@@ -331,6 +343,10 @@ export const createInvoice = async (req, res, next) => {
       linkedPO ? getPurchaseOrderByIdRepo(linkedPO) : Promise.resolve(null),
       companyId ? findCompanyByIdRepo(companyId) : Promise.resolve(null),
     ]);
+
+    if (linkedPO && linkedPOData?.approvalStatus !== "Approved") {
+      throw new AppError("Invoice can be created only for approved purchase orders", 400, "createInvoice");
+    }
     const effectiveBillTo = billTo || linkedPOData?.vendor;
     const effectiveShipTo = shipTo || linkedPOData?.deliverTo;
     const gstSplit = getInvoiceGstSplit(company, effectiveBillTo, effectiveShipTo);
@@ -648,6 +664,33 @@ export const updateInvoice = async (req, res, next) => {
       ...normalizedUpdateData,
       actionType: "update",
       approvalStatus: "Pending",
+      approvedBy: null,
+      approvalDate: null,
+      rejectionReason: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      updateHistory: [
+        ...(oldInvoice.updateHistory || []),
+        {
+          snapshot: toPlainObject(oldInvoice),
+          changes: getChangedFields(oldInvoice, normalizedUpdateData),
+          updatedBy: req.user?.id,
+          updatedAt: new Date(),
+        },
+      ],
+      approvalHistory: [
+        ...(oldInvoice.approvalHistory || []),
+        {
+          status: "Pending",
+          action: oldInvoice.approvalStatus === "Rejected" ? "RESUBMIT" : "UPDATE_SUBMIT",
+          comments:
+            oldInvoice.approvalStatus === "Rejected"
+              ? "Rejected invoice edited and resubmitted for approval"
+              : "Invoice update submitted for approval",
+          performedBy: req.user?.id,
+          performedAt: new Date(),
+        },
+      ],
       updatedBy: req.user?.id,
     });
 
@@ -838,6 +881,19 @@ export const approveInvoice = async (req, res, next) => {
       approvedBy: req.user?.id,
       approvalDate: new Date(),
       approvalComments,
+      rejectionReason: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      approvalHistory: [
+        ...(invoice.approvalHistory || []),
+        {
+          status: "Approved",
+          action: "APPROVE",
+          comments: approvalComments,
+          performedBy: req.user?.id,
+          performedAt: new Date(),
+        },
+      ],
       updatedBy: req.user?.id,
     };
 
@@ -885,10 +941,15 @@ export const approveInvoice = async (req, res, next) => {
 export const rejectInvoice = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { approvalComments } = req.body;
+    const { approvalComments, rejectionReason } = req.body;
 
     if (!id) {
       throw new AppError("Invoice ID is required", 400, "rejectInvoice");
+    }
+
+    const reason = String(rejectionReason || approvalComments || "").trim();
+    if (!reason) {
+      throw new AppError("Rejection reason is required", 400, "rejectInvoice");
     }
 
     const invoice = await getInvoiceByIdRepo(id);
@@ -898,7 +959,32 @@ export const rejectInvoice = async (req, res, next) => {
       status: "PENDING_APPROVAL",
       approvedBy: req.user?.id,
       approvalDate: new Date(),
-      approvalComments,
+      approvalComments: reason,
+      rejectionReason: reason,
+      rejectedBy: req.user?.id,
+      rejectedAt: new Date(),
+      approvalHistory: [
+        ...(invoice.approvalHistory || []),
+        {
+          status: "Rejected",
+          action: "REJECT",
+          reason,
+          comments: reason,
+          performedBy: req.user?.id,
+          performedAt: new Date(),
+        },
+      ],
+      rejectionHistory: [
+        ...(invoice.rejectionHistory || []),
+        {
+          status: "Rejected",
+          action: "REJECT",
+          reason,
+          comments: reason,
+          performedBy: req.user?.id,
+          performedAt: new Date(),
+        },
+      ],
       updatedBy: req.user?.id,
     };
 
@@ -923,7 +1009,7 @@ export const rejectInvoice = async (req, res, next) => {
         companyId: req.companyId,
         recipientId: invoice.createdBy.toString(),
         title: "Invoice Rejected",
-        message: `Your invoice ${invoice.invoiceNo} has been rejected by ${userName}. Reason: ${approvalComments}`,
+        message: `Your invoice ${invoice.invoiceNo} has been rejected by ${userName}. Reason: ${reason}`,
         type: "REJECTED",
         relatedEntity: {
           entityType: "INVOICE",
@@ -1131,6 +1217,13 @@ export const createInvoiceWithJournal = async (req, res, next) => {
       );
     }
 
+    if (linkedPO) {
+      const linkedPOData = await getPurchaseOrderByIdRepo(linkedPO);
+      if (linkedPOData?.approvalStatus !== "Approved") {
+        throw new AppError("Invoice can be created only for approved purchase orders", 400, "createInvoiceWithJournal");
+      }
+    }
+
     // Calculate totals
     let totalTaxableValue = 0;
     let totalCGSTAmount = 0;
@@ -1291,6 +1384,9 @@ export const downloadWordInvoice = async (req, res, next) => {
     if (!invoice) {
       throw new AppError("Invoice not found", 404, "downloadWordInvoice");
     }
+    if (invoice.approvalStatus !== "Approved") {
+      throw new AppError("Only approved invoices can be downloaded", 400, "downloadWordInvoice");
+    }
 
     const templateName = invoice.withSignature
       ? "Invoice-Template With Signeture.docx"
@@ -1325,6 +1421,9 @@ export const downloadPdfInvoice = async (req, res, next) => {
 
     if (!invoice) {
       throw new AppError("Invoice not found", 404, "downloadPdfInvoice");
+    }
+    if (invoice.approvalStatus !== "Approved") {
+      throw new AppError("Only approved invoices can be downloaded", 400, "downloadPdfInvoice");
     }
 
     const templateName = invoice.withSignature

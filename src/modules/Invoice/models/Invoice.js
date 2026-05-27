@@ -137,6 +137,28 @@ const paymentScheduleSchema = new mongoose.Schema({
   paidAmount: { type: Number, default: 0, min: 0 },
 });
 
+const workflowHistorySchema = new mongoose.Schema(
+  {
+    status: { type: String },
+    action: { type: String },
+    reason: { type: String },
+    comments: { type: String },
+    performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    performedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const updateHistorySchema = new mongoose.Schema(
+  {
+    snapshot: { type: mongoose.Schema.Types.Mixed },
+    changes: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const invoiceSchema = new mongoose.Schema(
   {
     companyId: {
@@ -253,6 +275,12 @@ const invoiceSchema = new mongoose.Schema(
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approvalDate: { type: Date },
     approvalComments: { type: String },
+    rejectionReason: { type: String },
+    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    rejectedAt: { type: Date },
+    rejectionHistory: { type: [workflowHistorySchema], default: [] },
+    approvalHistory: { type: [workflowHistorySchema], default: [] },
+    updateHistory: { type: [updateHistorySchema], default: [] },
     actionType: {
       type: String,
       enum: ["create", "update", "delete"],
