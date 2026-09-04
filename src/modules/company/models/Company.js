@@ -21,6 +21,7 @@ const taxSchema = new Schema(
     },
     gstin: { type: String },
     pan: { type: String },
+    tan: { type: String },
   },
   { _id: false }
 );
@@ -84,6 +85,17 @@ const companySchema = new Schema(
       trim: true,
       unique: true,
     },
+    tradeName: { type: String, trim: true },
+    companyType: { type: String, trim: true },
+    businessNature: { type: String, trim: true },
+    incorporationDate: { type: Date },
+    financialYearStart: { type: Date },
+    booksBeginFrom: { type: Date },
+    branchName: { type: String, trim: true },
+    email: { type: String, trim: true },
+    phone: { type: String, trim: true },
+    website: { type: String, trim: true },
+    authorizedSignatory: { type: String, trim: true },
     owner: {
       type: String, // Store as string (User DB ID)
       required: true,
