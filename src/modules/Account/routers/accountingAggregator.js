@@ -7,6 +7,7 @@ import paymentRoutes from "./paymentRoutes.js";
 import accountTypeRoutes from "./accountTypeRoutes.js";
 import reportRoutes from "./reportRoutes.js";
 import bankReconciliationRoutes from "./bankReconciliationRoutes.js";
+import expenseAuditRoutes from "./expenseAuditRoutes.js";
 
 const router = express.Router();
 
@@ -16,6 +17,7 @@ router.use("/journal", journalRoutes);
 router.use("/journal-excel", journalExcelRoutes);
 router.use("/payment", paymentRoutes);
 router.use("/bank-reconciliation", bankReconciliationRoutes);
+router.use("/expense-audit", expenseAuditRoutes);
 router.use("/account-types", accountTypeRoutes);
 router.use("/report", reportRoutes);
 router.use("/reports", reportRoutes);

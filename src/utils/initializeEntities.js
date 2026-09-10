@@ -138,6 +138,14 @@ export const initializeEntities = async () => {
         system: false,
         parentKey: "ACCOUNTS",
       },
+      {
+        name: "Expense Audit",
+        key: "EXPENSE AUDIT",
+        isNavItem: true,
+        navLink: "/accounting/expense-audit",
+        system: false,
+        parentKey: "ACCOUNTS",
+      },
 
       // Master Control children
       {
