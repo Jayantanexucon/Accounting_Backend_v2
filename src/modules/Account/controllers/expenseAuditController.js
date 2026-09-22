@@ -4,6 +4,12 @@ import { getExpenseAuditTransactionModel } from "../models/ExpenseAuditTransacti
 import { getExpenseAuditCategoryModel } from "../models/ExpenseAuditCategory.js";
 
 const normalize = (value) => String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const getDuplicateKey = ({ transactionDate, description, debitAmount, creditAmount }) => {
+  const date = transactionDate instanceof Date && !Number.isNaN(transactionDate.getTime())
+    ? transactionDate.toISOString().slice(0, 10)
+    : "";
+  return [date, normalize(description), number(debitAmount).toFixed(2), number(creditAmount).toFixed(2)].join("|");
+};
 const number = (value) => {
   if (value == null || value === "") return 0;
   if (typeof value === "number" && Number.isFinite(value)) return Math.abs(value);
@@ -209,22 +215,32 @@ export const uploadTransactions = async (req, res) => {
   try {
     const { companyId, transactions, fileName = "", replaceExistingFile = false } = req.body;
     if (!companyId || !Array.isArray(transactions) || !transactions.length) return res.status(400).json({ status: "error", message: "Company and transaction rows are required" });
-    const Identifier = await getExpenseAuditIdentifierModel();
     const Transaction = await getExpenseAuditTransactionModel();
     const identifiers = await getIdentifierCatalog(companyId);
     const batchId = crypto.randomUUID();
-    const docs = transactions.map((row) => {
+    if (replaceExistingFile && fileName) await Transaction.deleteMany({ companyId, fileName });
+    const existingTransactions = await Transaction.find({ companyId }).select("transactionDate description debitAmount creditAmount duplicateKey").lean();
+    const existingKeys = new Set(existingTransactions.map((row) => row.duplicateKey || getDuplicateKey(row)));
+    const batchKeys = new Set();
+    const duplicateRows = [];
+    const docs = transactions.map((row, index) => {
       const debitAmount = number(row.debitAmount);
       const creditAmount = number(row.creditAmount);
       const description = String(row.description || "").trim();
-      const normalizedDescription = normalize(description);
+      const transactionDate = new Date(row.transactionDate);
+      const duplicateKey = getDuplicateKey({ transactionDate, description, debitAmount, creditAmount });
+      if (existingKeys.has(duplicateKey) || batchKeys.has(duplicateKey)) {
+        duplicateRows.push({ rowNumber: row.rowNumber || index + 2, description, reason: "Matching date, description, debit, and credit already imported" });
+        return null;
+      }
+      batchKeys.add(duplicateKey);
       const match = findIdentifierMatch(description, identifiers);
-      return { companyId, transactionDate: new Date(row.transactionDate), description, debitAmount, creditAmount, amount: debitAmount || creditAmount, direction: debitAmount ? "DEBIT" : creditAmount ? "CREDIT" : "", ...getMatchFields(match), rowNumber: row.rowNumber || null, fileName, importBatchId: batchId, originalRowData: row.originalRowData || null };
+      return { companyId, transactionDate, description, debitAmount, creditAmount, amount: debitAmount || creditAmount, direction: debitAmount ? "DEBIT" : creditAmount ? "CREDIT" : "", ...getMatchFields(match), rowNumber: row.rowNumber || null, fileName, importBatchId: batchId, duplicateKey, originalRowData: row.originalRowData || null };
     });
-    if (docs.some((row) => Number.isNaN(row.transactionDate.getTime()))) return res.status(400).json({ status: "error", message: "Every transaction needs a valid date" });
-    if (replaceExistingFile && fileName) await Transaction.deleteMany({ companyId, fileName });
-    await Transaction.insertMany(docs);
-    return res.status(201).json({ status: "success", data: { importBatchId: batchId, importedCount: docs.length, identifiedCount: docs.filter((row) => row.identifierId).length }, message: `${docs.length} transaction rows imported` });
+    const validDocs = docs.filter(Boolean);
+    if (validDocs.some((row) => Number.isNaN(row.transactionDate.getTime()))) return res.status(400).json({ status: "error", message: "Every transaction needs a valid date" });
+    if (validDocs.length) await Transaction.insertMany(validDocs);
+    return res.status(201).json({ status: "success", data: { importBatchId: batchId, importedCount: validDocs.length, skippedDuplicateCount: duplicateRows.length, duplicates: duplicateRows, identifiedCount: validDocs.filter((row) => row.identifierId).length }, message: duplicateRows.length ? `${validDocs.length} rows imported; ${duplicateRows.length} duplicates skipped` : `${validDocs.length} transaction rows imported` });
   } catch (error) { return sendError(res, error); }
 };
 

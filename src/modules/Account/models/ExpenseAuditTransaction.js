@@ -20,6 +20,7 @@ const schema = new mongoose.Schema({
   fileName: { type: String, default: "" },
   importBatchId: { type: String, required: true, index: true },
   originalRowData: { type: Object, default: null },
+  duplicateKey: { type: String, default: "", index: true },
 }, { timestamps: true });
 schema.index({ companyId: 1, transactionDate: 1, identifierId: 1 });
 
