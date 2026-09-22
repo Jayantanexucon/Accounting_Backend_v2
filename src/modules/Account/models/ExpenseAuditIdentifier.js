@@ -5,6 +5,7 @@ const schema = new mongoose.Schema({
   companyId: { type: String, required: true, index: true },
   name: { type: String, required: true, trim: true },
   normalizedName: { type: String, required: true },
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "ExpenseAuditCategory", default: null, index: true },
   description: { type: String, default: "", trim: true },
   active: { type: Boolean, default: true, index: true },
   createdBy: { type: String, default: null },

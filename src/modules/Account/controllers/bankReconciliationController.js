@@ -605,6 +605,31 @@ export const getMonthlyReconciliationReport = async (req, res) => {
   }
 };
 
+const coerceBankValue = (value) => {
+  if (value == null || value === "" || value === "-") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.abs(value);
+
+  const text = String(value).trim();
+  if (!text) return 0;
+
+  const cleaned = text
+    .replace(/[₹$€£,\s]/g, "")
+    .replace(/[()]/g, "")
+    .replace(/(?:CR|DR|CREDIT|DEBIT)$/i, "")
+    .trim();
+
+  if (!cleaned) return 0;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+};
+
+const normalizeBankDirection = (value) => {
+  const direction = String(value || "").trim().toUpperCase();
+  if (/(CREDIT|CR|DEPOSIT|RECEIPT|PAID IN)/.test(direction)) return "CREDIT";
+  if (/(DEBIT|DR|WITHDRAWAL|PAYMENT|PAID OUT)/.test(direction)) return "DEBIT";
+  return "";
+};
+
 export const importBankTransactions = async (req, res, next) => {
   try {
     const { companyId, transactions } = req.body;
@@ -621,10 +646,24 @@ export const importBankTransactions = async (req, res, next) => {
     const docs = transactions.map((t, index) => {
       const transactionDate = parseImportDate(t.transactionDate || t.date);
       const valueDate = parseImportDate(t.valueDate);
-      const debitAmount = Math.abs(Number(t.debitAmount || 0));
-      const creditAmount = Math.abs(Number(t.creditAmount || 0));
-      const direction = (t.direction || t.type || (creditAmount > 0 ? "CREDIT" : debitAmount > 0 ? "DEBIT" : "CREDIT")).toUpperCase();
-      const amount = Math.abs(Number(t.amount || (direction === "CREDIT" ? creditAmount : debitAmount) || 0));
+      const debitAmount = coerceBankValue(t.debitAmount ?? t.debit ?? t.withdrawal ?? t.withdrawals ?? t.drAmount);
+      const creditAmount = coerceBankValue(t.creditAmount ?? t.credit ?? t.deposit ?? t.deposits ?? t.crAmount);
+      const singleAmount = coerceBankValue(t.amount ?? t.transactionAmount ?? t.netAmount);
+      const directionOverride = normalizeBankDirection(t.direction ?? t.type ?? t.transactionType ?? t.crDr ?? t.amountDirection);
+      let direction = directionOverride || (creditAmount > 0 ? "CREDIT" : debitAmount > 0 ? "DEBIT" : "");
+      let amount = singleAmount || (direction === "CREDIT" ? creditAmount : debitAmount) || 0;
+
+      if (!direction && singleAmount && debitAmount === 0 && creditAmount === 0) {
+        direction = String(t.amount ?? "").includes("-") ? "DEBIT" : "CREDIT";
+        amount = singleAmount;
+      }
+
+      if (direction === "CREDIT") {
+        amount = singleAmount || creditAmount || 0;
+      } else if (direction === "DEBIT") {
+        amount = singleAmount || debitAmount || 0;
+      }
+
       const normalizedNarration = BankReconciliationService.normalizeNarration(t.description || t.particulars || "");
       const reference = String(t.referenceNumber || t.reference || t.UTR || "").trim().toUpperCase();
 
@@ -643,10 +682,10 @@ export const importBankTransactions = async (req, res, next) => {
         date: transactionDate,
         transactionDate,
         amount,
-        debitAmount,
-        creditAmount,
+        debitAmount: debitAmount || (direction === "DEBIT" ? amount : 0),
+        creditAmount: creditAmount || (direction === "CREDIT" ? amount : 0),
         direction,
-        type: direction,
+        type: direction || "CREDIT",
         referenceNo: reference,
         normalizedReference: reference.replace(/[^A-Z0-9]/g, ""),
         reference,

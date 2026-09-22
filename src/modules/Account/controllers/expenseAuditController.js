@@ -26,6 +26,62 @@ const getRange = (endingYear) => ({
 const actor = (req) => String(req.user?._id || req.user?.id || "");
 const sendError = (res, error) => res.status(error.statusCode || 500).json({ status: "error", message: error.message || "Expense audit request failed" });
 
+const getIdentifierCatalog = async (companyId) => {
+  const Identifier = await getExpenseAuditIdentifierModel();
+  const Category = await getExpenseAuditCategoryModel();
+  const [identifiers, categories] = await Promise.all([
+    Identifier.find({ companyId, active: true }).sort({ normalizedName: -1 }).lean(),
+    Category.find({ companyId, active: true }).lean(),
+  ]);
+  const categoriesById = new Map(categories.map((category) => [String(category._id), category]));
+  return identifiers.flatMap((identifier) => {
+    const category = identifier.categoryId ? categoriesById.get(String(identifier.categoryId)) || null : null;
+    return String(identifier.name || "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .map((name) => ({
+        ...identifier,
+        name,
+        normalizedName: normalize(name),
+        category,
+      }));
+  }).sort((left, right) => right.normalizedName.length - left.normalizedName.length);
+};
+
+const getMatchFields = (match) => ({
+  identifierId: match?._id || null,
+  identifierName: match?.name || "",
+  categoryId: match?.category?._id || null,
+  categoryName: match?.category?.name || "",
+  categorySource: match?.category ? "AUTO" : "",
+  categorizedAt: match?.category ? new Date() : null,
+  categorizedBy: null,
+});
+
+const findIdentifierMatch = (description, identifiers) => {
+  const normalizedDescription = normalize(description);
+  return identifiers.find((identifier) => identifier.normalizedName && normalizedDescription.includes(identifier.normalizedName)) || null;
+};
+
+const rematchTransactions = async (companyId) => {
+  const Transaction = await getExpenseAuditTransactionModel();
+  const identifiers = await getIdentifierCatalog(companyId);
+  const transactions = await Transaction.find({ companyId }).select("_id description categorySource").lean();
+  const operations = transactions.map((transaction) => {
+    const fields = getMatchFields(findIdentifierMatch(transaction.description, identifiers));
+    if (transaction.categorySource === "MANUAL") {
+      delete fields.categoryId;
+      delete fields.categoryName;
+      delete fields.categorySource;
+      delete fields.categorizedAt;
+      delete fields.categorizedBy;
+    }
+    return { updateOne: { filter: { _id: transaction._id, companyId }, update: { $set: fields } } };
+  });
+  if (operations.length) await Transaction.bulkWrite(operations);
+};
+
 export const listIdentifiers = async (req, res) => {
   try {
     const Identifier = await getExpenseAuditIdentifierModel();
@@ -38,12 +94,13 @@ export const createIdentifier = async (req, res) => {
   try {
     const name = String(req.body.name || "").trim();
     if (!req.body.companyId || !name) return res.status(400).json({ status: "error", message: "Company and identifier name are required" });
+    const Category = await getExpenseAuditCategoryModel();
+    if (!req.body.categoryId) return res.status(400).json({ status: "error", message: "Category is required for an identifier" });
+    const category = req.body.categoryId ? await Category.findOne({ _id: req.body.categoryId, companyId: req.body.companyId, active: true }).lean() : null;
+    if (req.body.categoryId && !category) return res.status(404).json({ status: "error", message: "Category not found" });
     const Identifier = await getExpenseAuditIdentifierModel();
-    const data = await Identifier.create({ companyId: req.body.companyId, name, normalizedName: normalize(name), description: req.body.description || "", createdBy: actor(req), updatedBy: actor(req) });
-    const Transaction = await getExpenseAuditTransactionModel();
-    const transactions = await Transaction.find({ companyId: req.body.companyId, identifierId: null }).select("_id description").lean();
-    const matchingIds = transactions.filter((item) => normalize(item.description).includes(data.normalizedName)).map((item) => item._id);
-    if (matchingIds.length) await Transaction.updateMany({ _id: { $in: matchingIds } }, { $set: { identifierId: data._id, identifierName: data.name } });
+    const data = await Identifier.create({ companyId: req.body.companyId, name, normalizedName: normalize(name), categoryId: category?._id || null, description: req.body.description || "", createdBy: actor(req), updatedBy: actor(req) });
+    await rematchTransactions(req.body.companyId);
     return res.status(201).json({ status: "success", data, message: "Identifier created" });
   } catch (error) { return sendError(res, error.code === 11000 ? Object.assign(new Error("This identifier already exists"), { statusCode: 409 }) : error); }
 };
@@ -51,15 +108,15 @@ export const createIdentifier = async (req, res) => {
 export const updateIdentifier = async (req, res) => {
   try {
     const Identifier = await getExpenseAuditIdentifierModel();
-    const update = { description: req.body.description || "", updatedBy: actor(req) };
+    const Category = await getExpenseAuditCategoryModel();
+    if (!req.body.categoryId) return res.status(400).json({ status: "error", message: "Category is required for an identifier" });
+    const category = req.body.categoryId ? await Category.findOne({ _id: req.body.categoryId, companyId: req.body.companyId, active: true }).lean() : null;
+    if (req.body.categoryId && !category) return res.status(404).json({ status: "error", message: "Category not found" });
+    const update = { categoryId: category?._id || null, description: req.body.description || "", updatedBy: actor(req) };
     if (req.body.name?.trim()) { update.name = req.body.name.trim(); update.normalizedName = normalize(update.name); }
     const data = await Identifier.findOneAndUpdate({ _id: req.params.id, companyId: req.body.companyId }, update, { new: true, runValidators: true }).lean();
     if (!data) return res.status(404).json({ status: "error", message: "Identifier not found" });
-    const Transaction = await getExpenseAuditTransactionModel();
-    const transactions = await Transaction.find({ companyId: req.body.companyId }).select("_id description identifierId").lean();
-    const matchingIds = transactions.filter((item) => normalize(item.description).includes(data.normalizedName)).map((item) => item._id);
-    if (matchingIds.length) await Transaction.updateMany({ _id: { $in: matchingIds } }, { $set: { identifierId: data._id, identifierName: data.name } });
-    await Transaction.updateMany({ companyId: req.body.companyId, identifierId: data._id, _id: { $nin: matchingIds } }, { $set: { identifierId: null, identifierName: "" } });
+    await rematchTransactions(req.body.companyId);
     return res.json({ status: "success", data, message: "Identifier updated" });
   } catch (error) { return sendError(res, error); }
 };
@@ -69,6 +126,7 @@ export const deleteIdentifier = async (req, res) => {
     const Identifier = await getExpenseAuditIdentifierModel();
     const data = await Identifier.findOneAndUpdate({ _id: req.params.id, companyId: req.query.companyId }, { active: false, updatedBy: actor(req) }, { new: true }).lean();
     if (!data) return res.status(404).json({ status: "error", message: "Identifier not found" });
+    await rematchTransactions(req.query.companyId);
     return res.json({ status: "success", data, message: "Identifier deleted" });
   } catch (error) { return sendError(res, error); }
 };
@@ -98,6 +156,7 @@ export const updateCategory = async (req, res) => {
     if (req.body.name?.trim()) { update.name = req.body.name.trim(); update.normalizedName = normalize(update.name); }
     const data = await Category.findOneAndUpdate({ _id: req.params.id, companyId: req.body.companyId }, update, { new: true, runValidators: true }).lean();
     if (!data) return res.status(404).json({ status: "error", message: "Category not found" });
+    await rematchTransactions(req.body.companyId);
     await (await getExpenseAuditTransactionModel()).updateMany({ companyId: req.body.companyId, categoryId: data._id }, { $set: { categoryName: data.name } });
     return res.json({ status: "success", data, message: "Category updated" });
   } catch (error) { return sendError(res, error); }
@@ -108,7 +167,9 @@ export const deleteCategory = async (req, res) => {
     const Category = await getExpenseAuditCategoryModel();
     const data = await Category.findOneAndUpdate({ _id: req.params.id, companyId: req.query.companyId }, { active: false, updatedBy: actor(req) }, { new: true }).lean();
     if (!data) return res.status(404).json({ status: "error", message: "Category not found" });
+    await (await getExpenseAuditIdentifierModel()).updateMany({ companyId: req.query.companyId, categoryId: data._id }, { $set: { categoryId: null } });
     await (await getExpenseAuditTransactionModel()).updateMany({ companyId: req.query.companyId, categoryId: data._id }, { $set: { categoryId: null, categoryName: "", categorySource: "", categorizedAt: null, categorizedBy: null } });
+    await rematchTransactions(req.query.companyId);
     return res.json({ status: "success", data, message: "Category deleted" });
   } catch (error) { return sendError(res, error); }
 };
@@ -130,16 +191,13 @@ export const updateTransaction = async (req, res) => {
   try {
     const { companyId } = req.body;
     const Transaction = await getExpenseAuditTransactionModel();
-    const Identifier = await getExpenseAuditIdentifierModel();
     const update = {};
     if (req.body.description !== undefined) update.description = String(req.body.description || "").trim();
     if (req.body.transactionDate !== undefined) update.transactionDate = new Date(req.body.transactionDate);
     if (update.transactionDate && Number.isNaN(update.transactionDate.getTime())) return res.status(400).json({ status: "error", message: "Invalid transaction date" });
     if (update.description !== undefined) {
-      const identifiers = await Identifier.find({ companyId, active: true }).sort({ normalizedName: -1 }).lean();
-      const match = identifiers.find((item) => item.normalizedName && normalize(update.description).includes(item.normalizedName));
-      update.identifierId = match?._id || null;
-      update.identifierName = match?.name || "";
+      const identifiers = await getIdentifierCatalog(companyId);
+      Object.assign(update, getMatchFields(findIdentifierMatch(update.description, identifiers)));
     }
     const data = await Transaction.findOneAndUpdate({ _id: req.params.id, companyId }, { $set: update }, { new: true }).lean();
     if (!data) return res.status(404).json({ status: "error", message: "Audit transaction not found" });
@@ -153,15 +211,15 @@ export const uploadTransactions = async (req, res) => {
     if (!companyId || !Array.isArray(transactions) || !transactions.length) return res.status(400).json({ status: "error", message: "Company and transaction rows are required" });
     const Identifier = await getExpenseAuditIdentifierModel();
     const Transaction = await getExpenseAuditTransactionModel();
-    const identifiers = await Identifier.find({ companyId, active: true }).sort({ normalizedName: -1 }).lean();
+    const identifiers = await getIdentifierCatalog(companyId);
     const batchId = crypto.randomUUID();
     const docs = transactions.map((row) => {
       const debitAmount = number(row.debitAmount);
       const creditAmount = number(row.creditAmount);
       const description = String(row.description || "").trim();
       const normalizedDescription = normalize(description);
-      const match = identifiers.find((identifier) => identifier.normalizedName && normalizedDescription.includes(identifier.normalizedName));
-      return { companyId, transactionDate: new Date(row.transactionDate), description, debitAmount, creditAmount, amount: debitAmount || creditAmount, direction: debitAmount ? "DEBIT" : creditAmount ? "CREDIT" : "", identifierId: match?._id || null, identifierName: match?.name || "", categoryId: null, categoryName: "", categorySource: "", categorizedAt: null, categorizedBy: null, rowNumber: row.rowNumber || null, fileName, importBatchId: batchId, originalRowData: row.originalRowData || null };
+      const match = findIdentifierMatch(description, identifiers);
+      return { companyId, transactionDate: new Date(row.transactionDate), description, debitAmount, creditAmount, amount: debitAmount || creditAmount, direction: debitAmount ? "DEBIT" : creditAmount ? "CREDIT" : "", ...getMatchFields(match), rowNumber: row.rowNumber || null, fileName, importBatchId: batchId, originalRowData: row.originalRowData || null };
     });
     if (docs.some((row) => Number.isNaN(row.transactionDate.getTime()))) return res.status(400).json({ status: "error", message: "Every transaction needs a valid date" });
     if (replaceExistingFile && fileName) await Transaction.deleteMany({ companyId, fileName });
@@ -176,15 +234,10 @@ export const getOverview = async (req, res) => {
     if (!Number.isInteger(endingYear) || endingYear < 2000 || endingYear > 2200) return res.status(400).json({ status: "error", message: "A valid financial year is required" });
     const Transaction = await getExpenseAuditTransactionModel();
     const rows = await Transaction.find({ companyId: req.params.companyId, transactionDate: getRange(endingYear) }).sort({ transactionDate: -1, rowNumber: 1 }).lean();
-    const Identifier = await getExpenseAuditIdentifierModel();
-    const identifiers = await Identifier.find({ companyId: req.params.companyId, active: true }).sort({ normalizedName: -1 }).lean();
+    const identifiers = await getIdentifierCatalog(req.params.companyId);
     rows.forEach((row) => {
-      if (row.identifierId) return;
-      const match = identifiers.find((item) => item.normalizedName && normalize(row.description).includes(item.normalizedName));
-      if (match) {
-        row.identifierId = match._id;
-        row.identifierName = match.name;
-      }
+      if (row.categorySource === "MANUAL") return;
+      Object.assign(row, getMatchFields(findIdentifierMatch(row.description, identifiers)));
     });
     const groups = new Map();
     rows.filter((row) => row.identifierId).forEach((row) => {
