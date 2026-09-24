@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getExpenseAuditIdentifierModel } from "../models/ExpenseAuditIdentifier.js";
 import { getExpenseAuditTransactionModel } from "../models/ExpenseAuditTransaction.js";
 import { getExpenseAuditCategoryModel } from "../models/ExpenseAuditCategory.js";
+import { getExpenseAuditVersionModel } from "../models/ExpenseAuditVersion.js";
 
 const normalize = (value) => String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 const getDuplicateKey = ({ transactionDate, description, debitAmount, creditAmount }) => {
@@ -29,7 +30,12 @@ const getRange = (endingYear) => ({
   $gte: new Date(Number(endingYear) - 1, 3, 1),
   $lt: new Date(Number(endingYear), 3, 1),
 });
-const actor = (req) => String(req.user?._id || req.user?.id || "");
+const actor = (req) => {
+  const user = req.user || {};
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  const displayName = user.fullName || user.name || user.userName || fullName || user.email || user._id || user.id || "System";
+  return String(displayName);
+};
 const sendError = (res, error) => res.status(error.statusCode || 500).json({ status: "error", message: error.message || "Expense audit request failed" });
 
 const getIdentifierCatalog = async (companyId) => {
@@ -213,9 +219,10 @@ export const updateTransaction = async (req, res) => {
 
 export const uploadTransactions = async (req, res) => {
   try {
-    const { companyId, transactions, fileName = "", replaceExistingFile = false } = req.body;
+    const { companyId, transactions, fileName = "", replaceExistingFile = false, financialYearEnding } = req.body;
     if (!companyId || !Array.isArray(transactions) || !transactions.length) return res.status(400).json({ status: "error", message: "Company and transaction rows are required" });
     const Transaction = await getExpenseAuditTransactionModel();
+    const Version = await getExpenseAuditVersionModel();
     const identifiers = await getIdentifierCatalog(companyId);
     const batchId = crypto.randomUUID();
     if (replaceExistingFile && fileName) await Transaction.deleteMany({ companyId, fileName });
@@ -240,7 +247,63 @@ export const uploadTransactions = async (req, res) => {
     const validDocs = docs.filter(Boolean);
     if (validDocs.some((row) => Number.isNaN(row.transactionDate.getTime()))) return res.status(400).json({ status: "error", message: "Every transaction needs a valid date" });
     if (validDocs.length) await Transaction.insertMany(validDocs);
+
+    const year = Number(financialYearEnding || req.body.financialYearEnding || 0);
+    if (Number.isInteger(year) && year >= 2000) {
+      const snapshot = await Transaction.find({ companyId, transactionDate: getRange(year) }).sort({ transactionDate: 1, rowNumber: 1 }).lean();
+      const versions = await Version.find({ companyId, financialYearEnding: year }).sort({ versionNumber: 1 }).lean();
+      const nextVersionNumber = versions.length ? Math.max(...versions.map((item) => Number(item.versionNumber || 0))) + 1 : 1;
+      const versionDoc = await Version.create({
+        companyId,
+        financialYearEnding: year,
+        versionNumber: nextVersionNumber,
+        label: `Upload ${nextVersionNumber}`,
+        fileName,
+        snapshot: snapshot.map((row) => ({ ...row, _id: row._id.toString() })),
+        active: true,
+        summary: {
+          importedCount: validDocs.length,
+          duplicateCount: duplicateRows.length,
+          identifiedCount: validDocs.filter((row) => row.identifierId).length,
+          totalRows: snapshot.length,
+        },
+        createdBy: actor(req),
+      });
+      await Version.updateMany({ companyId, financialYearEnding: year, _id: { $ne: versionDoc._id } }, { $set: { active: false } });
+    }
+
     return res.status(201).json({ status: "success", data: { importBatchId: batchId, importedCount: validDocs.length, skippedDuplicateCount: duplicateRows.length, duplicates: duplicateRows, identifiedCount: validDocs.filter((row) => row.identifierId).length }, message: duplicateRows.length ? `${validDocs.length} rows imported; ${duplicateRows.length} duplicates skipped` : `${validDocs.length} transaction rows imported` });
+  } catch (error) { return sendError(res, error); }
+};
+
+export const listVersions = async (req, res) => {
+  try {
+    const Version = await getExpenseAuditVersionModel();
+    const companyId = req.params.companyId || req.query.companyId;
+    const financialYearEnding = Number(req.params.financialYearEnding || req.query.financialYearEnding || 0);
+    const data = await Version.find({ companyId, financialYearEnding }).sort({ versionNumber: 1 }).lean();
+    return res.json({ status: "success", data, message: "Audit versions loaded" });
+  } catch (error) { return sendError(res, error); }
+};
+
+export const checkoutVersion = async (req, res) => {
+  try {
+    const companyId = req.params.companyId || req.body.companyId;
+    const financialYearEnding = Number(req.params.financialYearEnding || req.body.financialYearEnding || 0);
+    const Version = await getExpenseAuditVersionModel();
+    const version = await Version.findOne({ _id: req.params.versionId || req.body.versionId, companyId, financialYearEnding }).lean();
+    if (!version) return res.status(404).json({ status: "error", message: "Version not found" });
+    const Transaction = await getExpenseAuditTransactionModel();
+    const snapshotRows = Array.isArray(version.snapshot) ? version.snapshot : [];
+    await Transaction.deleteMany({ companyId, transactionDate: getRange(financialYearEnding) });
+    const restoreDocs = snapshotRows.map((row) => {
+      const { _id, ...rest } = row;
+      return { ...rest, companyId, transactionDate: new Date(rest.transactionDate) };
+    });
+    if (restoreDocs.length) await Transaction.insertMany(restoreDocs);
+    await Version.updateMany({ companyId, financialYearEnding }, { $set: { active: false } });
+    await Version.findByIdAndUpdate(version._id, { $set: { active: true } }, { new: true });
+    return res.json({ status: "success", data: { ...version, active: true }, message: "Checked out selected upload state" });
   } catch (error) { return sendError(res, error); }
 };
 
