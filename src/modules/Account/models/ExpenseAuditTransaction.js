@@ -3,6 +3,7 @@ import { getDatabase } from "../../../config/databases.js";
 
 const schema = new mongoose.Schema({
   companyId: { type: String, required: true, index: true },
+  versionId: { type: mongoose.Schema.Types.ObjectId, ref: "ExpenseAuditVersion", default: null, index: true },
   transactionDate: { type: Date, required: true, index: true },
   description: { type: String, default: "" },
   debitAmount: { type: Number, default: 0 },

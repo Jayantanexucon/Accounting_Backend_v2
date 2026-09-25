@@ -94,6 +94,25 @@ const rematchTransactions = async (companyId) => {
   if (operations.length) await Transaction.bulkWrite(operations);
 };
 
+const syncVersionSnapshot = async ({ companyId, versionId, transactionId, updatedRow }) => {
+  if (!versionId || !companyId) return;
+  const Version = await getExpenseAuditVersionModel();
+  const version = await Version.findOne({ _id: versionId, companyId }).lean();
+  if (!version) return;
+  const nextSnapshot = (Array.isArray(version.snapshot) ? version.snapshot : []).map((row) => {
+    const rowId = String(row?._id || "");
+    if (transactionId && rowId !== String(transactionId)) return row;
+    if (!transactionId && !updatedRow) return row;
+    if (updatedRow) return { ...row, ...updatedRow, _id: rowId || updatedRow._id };
+    return row;
+  });
+  if (transactionId) {
+    const existingRow = nextSnapshot.find((row) => String(row?._id || "") === String(transactionId));
+    if (!existingRow && updatedRow) nextSnapshot.push({ ...updatedRow, _id: String(transactionId) });
+  }
+  await Version.updateOne({ _id: versionId, companyId }, { $set: { snapshot: nextSnapshot } });
+};
+
 export const listIdentifiers = async (req, res) => {
   try {
     const Identifier = await getExpenseAuditIdentifierModel();
@@ -188,20 +207,22 @@ export const deleteCategory = async (req, res) => {
 
 export const updateTransactionCategory = async (req, res) => {
   try {
-    const { companyId, categoryId = null } = req.body;
+    const { companyId, categoryId = null, versionId = null } = req.body;
     const Transaction = await getExpenseAuditTransactionModel();
     const Category = await getExpenseAuditCategoryModel();
     const category = categoryId ? await Category.findOne({ _id: categoryId, companyId, active: true }).lean() : null;
     if (categoryId && !category) return res.status(404).json({ status: "error", message: "Category not found" });
-    const data = await Transaction.findOneAndUpdate({ _id: req.params.id, companyId }, { $set: { categoryId: category?._id || null, categoryName: category?.name || "", categorySource: category ? "MANUAL" : "", categorizedAt: category ? new Date() : null, categorizedBy: category ? actor(req) : null } }, { new: true }).lean();
-    if (!data) return res.status(404).json({ status: "error", message: "Audit transaction not found" });
+    const filter = versionId ? { _id: req.params.id, companyId, versionId } : { _id: req.params.id, companyId };
+    const data = await Transaction.findOneAndUpdate(filter, { $set: { categoryId: category?._id || null, categoryName: category?.name || "", categorySource: category ? "MANUAL" : "", categorizedAt: category ? new Date() : null, categorizedBy: category ? actor(req) : null } }, { new: true }).lean();
+    if (!data) return res.status(404).json({ status: "error", message: "Audit transaction not found for the current version" });
+    await syncVersionSnapshot({ companyId, versionId: data.versionId, transactionId: data._id, updatedRow: { ...data, _id: data._id.toString() } });
     return res.json({ status: "success", data, message: category ? "Transaction categorized" : "Category removed" });
   } catch (error) { return sendError(res, error); }
 };
 
 export const updateTransaction = async (req, res) => {
   try {
-    const { companyId } = req.body;
+    const { companyId, versionId = null } = req.body;
     const Transaction = await getExpenseAuditTransactionModel();
     const update = {};
     if (req.body.description !== undefined) update.description = String(req.body.description || "").trim();
@@ -211,15 +232,17 @@ export const updateTransaction = async (req, res) => {
       const identifiers = await getIdentifierCatalog(companyId);
       Object.assign(update, getMatchFields(findIdentifierMatch(update.description, identifiers)));
     }
-    const data = await Transaction.findOneAndUpdate({ _id: req.params.id, companyId }, { $set: update }, { new: true }).lean();
-    if (!data) return res.status(404).json({ status: "error", message: "Audit transaction not found" });
+    const filter = versionId ? { _id: req.params.id, companyId, versionId } : { _id: req.params.id, companyId };
+    const data = await Transaction.findOneAndUpdate(filter, { $set: update }, { new: true }).lean();
+    if (!data) return res.status(404).json({ status: "error", message: "Audit transaction not found for the current version" });
+    await syncVersionSnapshot({ companyId, versionId: data.versionId, transactionId: data._id, updatedRow: { ...data, _id: data._id.toString() } });
     return res.json({ status: "success", data, message: "Transaction updated" });
   } catch (error) { return sendError(res, error); }
 };
 
 export const uploadTransactions = async (req, res) => {
   try {
-    const { companyId, transactions, fileName = "", replaceExistingFile = true, financialYearEnding } = req.body;
+    const { companyId, transactions, fileName = "", label = "", replaceExistingFile = true, financialYearEnding } = req.body;
     if (!companyId || !Array.isArray(transactions) || !transactions.length) return res.status(400).json({ status: "error", message: "Company and transaction rows are required" });
 
     const validIncomingRows = transactions.filter((row) => {
@@ -261,25 +284,29 @@ export const uploadTransactions = async (req, res) => {
     if (validDocs.length) await Transaction.insertMany(validDocs);
 
     if (Number.isInteger(year) && year >= 2000) {
-      const snapshot = await Transaction.find({ companyId, transactionDate: getRange(year) }).sort({ transactionDate: 1, rowNumber: 1 }).lean();
       const versions = await Version.find({ companyId, financialYearEnding: year }).sort({ versionNumber: 1 }).lean();
       const nextVersionNumber = versions.length ? Math.max(...versions.map((item) => Number(item.versionNumber || 0))) + 1 : 1;
+      const versionLabel = String(label || "").trim() || `Upload ${nextVersionNumber}`;
       const versionDoc = await Version.create({
         companyId,
         financialYearEnding: year,
         versionNumber: nextVersionNumber,
-        label: `Upload ${nextVersionNumber}`,
+        label: versionLabel,
         fileName,
-        snapshot: snapshot.map((row) => ({ ...row, _id: row._id.toString() })),
+        snapshot: [],
         active: true,
         summary: {
           importedCount: validDocs.length,
           duplicateCount: duplicateRows.length,
           identifiedCount: validDocs.filter((row) => row.identifierId).length,
-          totalRows: snapshot.length,
+          totalRows: validDocs.length,
         },
         createdBy: actor(req),
       });
+      const insertedRows = await Transaction.find({ companyId, importBatchId: batchId }).sort({ transactionDate: 1, rowNumber: 1 }).lean();
+      const snapshotRows = insertedRows.map((row) => ({ ...row, _id: row._id.toString(), versionId: versionDoc._id }));
+      await Transaction.updateMany({ companyId, importBatchId: batchId }, { $set: { versionId: versionDoc._id } });
+      await Version.updateOne({ _id: versionDoc._id }, { $set: { snapshot: snapshotRows } });
       await Version.updateMany({ companyId, financialYearEnding: year, _id: { $ne: versionDoc._id } }, { $set: { active: false } });
     }
 
@@ -323,7 +350,7 @@ export const checkoutVersion = async (req, res) => {
     await Transaction.deleteMany({ companyId, transactionDate: getRange(financialYearEnding) });
     const restoreDocs = snapshotRows.map((row) => {
       const { _id, ...rest } = row;
-      return { ...rest, companyId, transactionDate: new Date(rest.transactionDate) };
+      return { ...rest, companyId, versionId: version._id, transactionDate: new Date(rest.transactionDate) };
     });
     if (restoreDocs.length) await Transaction.insertMany(restoreDocs);
     await Version.updateMany({ companyId, financialYearEnding }, { $set: { active: false } });
@@ -335,9 +362,12 @@ export const checkoutVersion = async (req, res) => {
 export const getOverview = async (req, res) => {
   try {
     const endingYear = Number(req.query.financialYearEnding);
+    const versionId = req.query.versionId || req.body?.versionId || null;
     if (!Number.isInteger(endingYear) || endingYear < 2000 || endingYear > 2200) return res.status(400).json({ status: "error", message: "A valid financial year is required" });
     const Transaction = await getExpenseAuditTransactionModel();
-    const rows = await Transaction.find({ companyId: req.params.companyId, transactionDate: getRange(endingYear) }).sort({ transactionDate: -1, rowNumber: 1 }).lean();
+    const filter = { companyId: req.params.companyId, transactionDate: getRange(endingYear) };
+    if (versionId) filter.versionId = versionId;
+    const rows = await Transaction.find(filter).sort({ transactionDate: -1, rowNumber: 1 }).lean();
     const identifiers = await getIdentifierCatalog(req.params.companyId);
     rows.forEach((row) => {
       if (row.categorySource === "MANUAL") return;
