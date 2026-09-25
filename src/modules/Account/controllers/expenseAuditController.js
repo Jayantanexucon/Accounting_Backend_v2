@@ -219,25 +219,38 @@ export const updateTransaction = async (req, res) => {
 
 export const uploadTransactions = async (req, res) => {
   try {
-    const { companyId, transactions, fileName = "", replaceExistingFile = false, financialYearEnding } = req.body;
+    const { companyId, transactions, fileName = "", replaceExistingFile = true, financialYearEnding } = req.body;
     if (!companyId || !Array.isArray(transactions) || !transactions.length) return res.status(400).json({ status: "error", message: "Company and transaction rows are required" });
+
+    const validIncomingRows = transactions.filter((row) => {
+      const description = String(row?.description || "").trim();
+      const debitAmount = number(row?.debitAmount);
+      const creditAmount = number(row?.creditAmount);
+      const transactionDate = new Date(row?.transactionDate);
+      return description && !Number.isNaN(transactionDate.getTime()) && (debitAmount > 0 || creditAmount > 0);
+    });
+    if (!validIncomingRows.length) return res.status(400).json({ status: "error", message: "No valid transaction rows were found in the uploaded file" });
+
     const Transaction = await getExpenseAuditTransactionModel();
     const Version = await getExpenseAuditVersionModel();
     const identifiers = await getIdentifierCatalog(companyId);
     const batchId = crypto.randomUUID();
-    if (replaceExistingFile && fileName) await Transaction.deleteMany({ companyId, fileName });
-    const existingTransactions = await Transaction.find({ companyId }).select("transactionDate description debitAmount creditAmount duplicateKey").lean();
-    const existingKeys = new Set(existingTransactions.map((row) => row.duplicateKey || getDuplicateKey(row)));
+    const year = Number(financialYearEnding || req.body.financialYearEnding || 0);
+
+    if (replaceExistingFile && Number.isInteger(year) && year >= 2000) {
+      await Transaction.deleteMany({ companyId, transactionDate: getRange(year) });
+    }
+
     const batchKeys = new Set();
     const duplicateRows = [];
-    const docs = transactions.map((row, index) => {
+    const docs = validIncomingRows.map((row, index) => {
       const debitAmount = number(row.debitAmount);
       const creditAmount = number(row.creditAmount);
       const description = String(row.description || "").trim();
       const transactionDate = new Date(row.transactionDate);
       const duplicateKey = getDuplicateKey({ transactionDate, description, debitAmount, creditAmount });
-      if (existingKeys.has(duplicateKey) || batchKeys.has(duplicateKey)) {
-        duplicateRows.push({ rowNumber: row.rowNumber || index + 2, description, reason: "Matching date, description, debit, and credit already imported" });
+      if (batchKeys.has(duplicateKey)) {
+        duplicateRows.push({ rowNumber: row.rowNumber || index + 2, description, reason: "Duplicate row within the uploaded file" });
         return null;
       }
       batchKeys.add(duplicateKey);
@@ -245,10 +258,8 @@ export const uploadTransactions = async (req, res) => {
       return { companyId, transactionDate, description, debitAmount, creditAmount, amount: debitAmount || creditAmount, direction: debitAmount ? "DEBIT" : creditAmount ? "CREDIT" : "", ...getMatchFields(match), rowNumber: row.rowNumber || null, fileName, importBatchId: batchId, duplicateKey, originalRowData: row.originalRowData || null };
     });
     const validDocs = docs.filter(Boolean);
-    if (validDocs.some((row) => Number.isNaN(row.transactionDate.getTime()))) return res.status(400).json({ status: "error", message: "Every transaction needs a valid date" });
     if (validDocs.length) await Transaction.insertMany(validDocs);
 
-    const year = Number(financialYearEnding || req.body.financialYearEnding || 0);
     if (Number.isInteger(year) && year >= 2000) {
       const snapshot = await Transaction.find({ companyId, transactionDate: getRange(year) }).sort({ transactionDate: 1, rowNumber: 1 }).lean();
       const versions = await Version.find({ companyId, financialYearEnding: year }).sort({ versionNumber: 1 }).lean();
@@ -272,7 +283,21 @@ export const uploadTransactions = async (req, res) => {
       await Version.updateMany({ companyId, financialYearEnding: year, _id: { $ne: versionDoc._id } }, { $set: { active: false } });
     }
 
-    return res.status(201).json({ status: "success", data: { importBatchId: batchId, importedCount: validDocs.length, skippedDuplicateCount: duplicateRows.length, duplicates: duplicateRows, identifiedCount: validDocs.filter((row) => row.identifierId).length }, message: duplicateRows.length ? `${validDocs.length} rows imported; ${duplicateRows.length} duplicates skipped` : `${validDocs.length} transaction rows imported` });
+    return res.status(201).json({
+      status: "success",
+      data: {
+        importBatchId: batchId,
+        importedCount: validDocs.length,
+        skippedDuplicateCount: duplicateRows.length,
+        skippedInvalidCount: transactions.length - validIncomingRows.length,
+        duplicates: duplicateRows,
+        identifiedCount: validDocs.filter((row) => row.identifierId).length,
+        replacedExistingInstance: Boolean(replaceExistingFile),
+      },
+      message: duplicateRows.length || transactions.length - validIncomingRows.length
+        ? `${validDocs.length} rows imported; ${duplicateRows.length} duplicates skipped; ${transactions.length - validIncomingRows.length} invalid rows ignored`
+        : `${validDocs.length} transaction rows imported`,
+    });
   } catch (error) { return sendError(res, error); }
 };
 
